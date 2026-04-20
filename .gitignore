@@ -1,0 +1,15 @@
+# CIPHER — Gitignore
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+cipher/memory/drop_vault/*.drop
+cipher/memory/drop_vault/vault_index.json
+episode_traces/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
