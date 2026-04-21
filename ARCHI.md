@@ -1,6 +1,6 @@
 # CIPHER — Architecture & Build Status
 
-> Last updated: Phase 6 complete
+> Last updated: Phase 7 complete (per-step oversight flags + penalties)
 
 ## Build Status
 
@@ -78,11 +78,13 @@ flowchart TB
         RRED["RED Reward\nexfil × stealth × memory\n× complexity + penalties"]
         RBLUE["BLUE Reward\ndetection × speed\n× honeypot − false_positives"]
         ROVER["Oversight Signal\nReward hacking detection\nCollusion monitoring"]
+        RFLAG["OversightFlag Penalties\nper-step severity penalties\napplied to episode totals"]
         RLOG["Reward Logger\nrewards_log.csv\nfleet_verdict + fleet_judgment"]
     end
 
     subgraph OVERSIGHT["🟡 Oversight Agent — Phase 7 ✅"]
         AUDITOR["OversightAuditor\n9th LLM agent\nFleet bonus + verdict"]
+        OFLAG["OversightFlag Engine\nper-step anomaly flags\npersisted in episode_log"]
     end
 
     subgraph TRAINING["⚙️ Training — Phase 8 🔵"]
@@ -113,6 +115,7 @@ flowchart TB
     LLM -->|completions| RED
     LLM -->|completions| BLUE
     OVERSIGHT -->|audit both teams| REWARDS
+    OVERSIGHT -->|emit per-step flags| ENV
     TRAINING -->|episode traces| DASHBOARD
     ENV -->|episode traces JSON| DASHBOARD
 ```

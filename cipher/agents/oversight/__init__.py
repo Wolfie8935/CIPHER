@@ -1,4 +1,4 @@
 """Oversight agent package — Phase 7."""
-from cipher.agents.oversight.auditor import OversightAuditor
+from cipher.agents.oversight.auditor import OversightAuditor, OversightFlag
 
-__all__ = ["OversightAuditor"]
+__all__ = ["OversightAuditor", "OversightFlag"]

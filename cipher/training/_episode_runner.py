@@ -212,6 +212,9 @@ def run_episode(
     steps_to_first_detection: int | None = None
     confirmed_detection_step: int | None = None
     action_reason_mismatch_count = 0
+    oversight_flags: list[dict[str, Any]] = []
+    oversight_step_penalty_red = 0.0
+    oversight_step_penalty_blue = 0.0
 
     if debug_force_exfil_sanity:
         state.red_current_node = scenario.high_value_target_node
@@ -334,6 +337,27 @@ def run_episode(
                 break
 
         if red_abort_triggered:
+            step_flags = oversight_auditor.evaluate_step(
+                step=step,
+                state=state,
+                red_actions=red_actions,
+                blue_actions=[],
+            )
+            for flag in step_flags:
+                p_red, p_blue = _oversight_penalty_from_flag(flag)
+                oversight_step_penalty_red += p_red
+                oversight_step_penalty_blue += p_blue
+                flag_payload = flag.to_dict()
+                oversight_flags.append(flag_payload)
+                state.log_action(
+                    agent_id=oversight_auditor.AGENT_ID,
+                    action_type="OVERSIGHT_FLAG",
+                    action_payload=flag_payload,
+                    result={
+                        "applied_penalty_red": round(p_red, 4),
+                        "applied_penalty_blue": round(p_blue, 4),
+                    },
+                )
             logger.debug("ABORT triggered: skipping BLUE actions for step %s", step)
             break
 
@@ -439,6 +463,28 @@ def run_episode(
                         f"BLUE discovered {len(discovered)} drop(s) at node {action.target_node}"
                     )
 
+        step_flags = oversight_auditor.evaluate_step(
+            step=step,
+            state=state,
+            red_actions=red_actions,
+            blue_actions=blue_actions,
+        )
+        for flag in step_flags:
+            p_red, p_blue = _oversight_penalty_from_flag(flag)
+            oversight_step_penalty_red += p_red
+            oversight_step_penalty_blue += p_blue
+            flag_payload = flag.to_dict()
+            oversight_flags.append(flag_payload)
+            state.log_action(
+                agent_id=oversight_auditor.AGENT_ID,
+                action_type="OVERSIGHT_FLAG",
+                action_payload=flag_payload,
+                result={
+                    "applied_penalty_red": round(p_red, 4),
+                    "applied_penalty_blue": round(p_blue, 4),
+                },
+            )
+
         # Check max steps
         if step >= max_steps:
             state.is_terminal = True
@@ -476,6 +522,8 @@ def run_episode(
 
     judgment = oversight_auditor.judge_episode(state, red_action_log, blue_action_log)
     apply_fleet_bonus(red_reward, blue_reward, judgment)
+    red_reward.total += oversight_step_penalty_red
+    blue_reward.total += oversight_step_penalty_blue
 
     red_reward.total = round(red_reward.total, 4)
     blue_reward.total = round(blue_reward.total, 4)
@@ -515,6 +563,9 @@ def run_episode(
         "state": state,
         "scenario": scenario,
         "action_reason_mismatch_count": action_reason_mismatch_count,
+        "oversight_flags": oversight_flags,
+        "oversight_step_penalty_red": round(oversight_step_penalty_red, 4),
+        "oversight_step_penalty_blue": round(oversight_step_penalty_blue, 4),
     }
     if return_payload_mode:
         return result_payload
@@ -759,6 +810,29 @@ def _detect_action_reason_mismatch(action: Action) -> str | None:
     if any(term in reasoning for term in trap_intent_terms):
         return "stand_down_with_trap_intent"
     return None
+
+
+def _oversight_penalty_from_flag(flag: Any) -> tuple[float, float]:
+    """
+    Map OversightFlag severity to additive episode penalties.
+    Returns (red_penalty, blue_penalty).
+    """
+    severity = float(max(0.0, min(1.0, getattr(flag, "severity", 0.0))))
+    red_penalty = 0.0
+    blue_penalty = 0.0
+    agent_id = str(getattr(flag, "agent_id", ""))
+    flag_type = str(getattr(flag, "flag_type", ""))
+
+    if agent_id.startswith("red_") or flag_type in {"REWARD_HACKING_SUSPECTED", "DEAD_DROP_ANOMALY"}:
+        red_penalty -= severity
+    elif agent_id.startswith("blue_") or flag_type in {"BLUE_PASSIVITY"}:
+        blue_penalty -= severity
+    else:
+        # Neutral/unknown ownership flags apply lightly to both teams.
+        red_penalty -= severity * 0.5
+        blue_penalty -= severity * 0.5
+
+    return red_penalty, blue_penalty
 
 
 def _apply_trap_effect(effect: Any, state: Any, blue_obs: Any) -> None:

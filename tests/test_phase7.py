@@ -403,6 +403,102 @@ class TestEpisodeRunnerPhase7:
 
 
 class TestPhase8Preflight:
+    def test_oversight_step_flag_generation(self):
+        auditor = OversightAuditor(config)
+        state = _minimal_state()
+        flags = auditor.evaluate_step(
+            step=1,
+            state=state,
+            red_actions=[
+                Action(
+                    agent_id="red_operative_01",
+                    action_type=ActionType.WRITE_DEAD_DROP,
+                    reasoning="drop1",
+                ),
+                Action(
+                    agent_id="red_planner_01",
+                    action_type=ActionType.WRITE_DEAD_DROP,
+                    reasoning="drop2",
+                ),
+            ],
+            blue_actions=[
+                Action(
+                    agent_id="blue_deception_architect_01",
+                    action_type=ActionType.STAND_DOWN,
+                    reasoning="standing by",
+                )
+            ],
+        )
+        flag_types = {f.flag_type for f in flags}
+        assert "REWARD_HACKING_SUSPECTED" in flag_types
+        assert "BLUE_PASSIVITY" in flag_types
+
+    def test_oversight_flags_persist_in_episode_log(self):
+        gen = ScenarioGenerator()
+        scenario, graph = gen.generate(1)
+        result = run_episode(
+            scenario,
+            graph,
+            config,
+            max_steps=1,
+            verbose=False,
+            scripted_red_actions={
+                1: [
+                    Action(
+                        agent_id="red_planner_01",
+                        action_type=ActionType.WAIT,
+                        reasoning="hold",
+                    )
+                ]
+            },
+            scripted_blue_actions={
+                1: [
+                    Action(
+                        agent_id="blue_deception_architect_01",
+                        action_type=ActionType.STAND_DOWN,
+                        reasoning="hold while budget remains",
+                    )
+                ]
+            },
+        )
+        oversight_entries = [
+            e for e in result["state"].episode_log if e.get("action_type") == "OVERSIGHT_FLAG"
+        ]
+        assert len(oversight_entries) >= 1
+        assert "applied_penalty_blue" in oversight_entries[0]["result"]
+        assert "severity" in oversight_entries[0]["payload"]
+
+    def test_oversight_flag_severity_penalty_applied(self):
+        gen = ScenarioGenerator()
+        scenario, graph = gen.generate(1)
+        result = run_episode(
+            scenario,
+            graph,
+            config,
+            max_steps=1,
+            verbose=False,
+            scripted_red_actions={
+                1: [
+                    Action(
+                        agent_id="red_planner_01",
+                        action_type=ActionType.WAIT,
+                        reasoning="hold",
+                    )
+                ]
+            },
+            scripted_blue_actions={
+                1: [
+                    Action(
+                        agent_id="blue_deception_architect_01",
+                        action_type=ActionType.STAND_DOWN,
+                        reasoning="hold while budget remains",
+                    )
+                ]
+            },
+        )
+        assert result["oversight_step_penalty_blue"] < 0.0
+        assert len(result["oversight_flags"]) >= 1
+
     def test_exfil_parser_rejects_node_like_target(self):
         from cipher.agents.red.exfiltrator import RedExfiltrator
 
