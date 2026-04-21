@@ -66,9 +66,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Set LLM_MODE before importing anything that reads it
-    if args.live:
-        os.environ["LLM_MODE"] = "live"
+    # Set LLM_MODE before importing anything that reads it.
+    # Plain `python main.py` is explicitly STUB; `--live` is explicitly LIVE.
+    os.environ["LLM_MODE"] = "live" if args.live else "stub"
 
     console = Console(force_terminal=True)
 

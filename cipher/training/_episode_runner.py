@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1027,8 +1028,14 @@ def _save_episode_trace(state: EpisodeState, episode_number: int) -> None:
     traces_dir = config.episode_traces_dir
     traces_dir.mkdir(parents=True, exist_ok=True)
 
-    filepath = traces_dir / f"episode_{episode_number:03d}.json"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filepath = traces_dir / f"episode_{episode_number:03d}_{ts}.json"
     trace_data = state.to_dict()
+
+    # Persist runtime mode so replay UI shows the true mode for this trace.
+    from cipher.utils.llm_mode import is_live_mode
+    trace_data["llm_mode"] = "live" if is_live_mode() else "stub"
+    trace_data["llm_backend"] = os.getenv("LLM_BACKEND", "")
 
     filepath.write_text(
         json.dumps(trace_data, indent=2, default=str, ensure_ascii=True),
