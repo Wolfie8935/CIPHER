@@ -2,7 +2,6 @@
 Configuration loader for CIPHER.
 
 Reads all environment variables from .env and exposes them as typed attributes.
-This is the ONLY place in the codebase that reads from os.environ.
 Every other module imports from config, never from os directly.
 
 Owns: environment variable loading, validation, and typed access.
@@ -136,7 +135,13 @@ class CipherConfig(BaseSettings):
 
     # ── Dashboard ────────────────────────────────────────────────
     dashboard_port: int = Field(8050)
-    dashboard_live_update_interval: int = Field(2, description="Seconds")
+    dashboard_live_port: int = Field(8051)
+    dashboard_live_update_interval: int = Field(2000, description="Milliseconds")
+
+    def model_post_init(self, __context) -> None:
+        # Backward compatibility: older envs used seconds (2) instead of ms (2000).
+        if self.dashboard_live_update_interval <= 10:
+            self.dashboard_live_update_interval *= 1000
 
     # ── Derived paths ────────────────────────────────────────────
     @property

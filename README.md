@@ -13,11 +13,12 @@ Adversarial multi-agent environment where RED infiltrates and exfiltrates while 
 | 5 — Trap Layer | FalseTrail, HoneypotPoison, DeadDropTamper | ✅ Complete |
 | 6 — Reward Functions | Full continuous rewards, reward_logger.py | ✅ Complete |
 | 7 — Oversight Agent | OversightAuditor (9th agent), fleet bonus | ✅ Complete |
-| 8 — Training Loop | Self-play, reward curves | 🔵 Next |
-| 12 — Dashboard | Episode replay visualization | 🟡 In Progress |
+| 8 — Training Loop | Self-play, reward curves + live state/event outputs | ✅ Complete |
+| 12 — Dashboard | Episode replay visualization | ✅ Complete |
+| 13 — Live Dashboard | Real-time training mode in unified dashboard app | ✅ Complete |
 | 14 — HuggingFace | Awaiting compute credits | ⬜ Not Started |
 
-Tests passing: **~182** | Reward logging: **rewards_log.csv** | Fleet verdict: per-episode | Modes: `LLM_MODE=stub` (free) / `LLM_MODE=live` (NVIDIA)
+Tests passing: **~214** | Reward logging: **rewards_log.csv** + **training_events.jsonl** + **training_state.json** | Fleet verdict: per-episode | Modes: `LLM_MODE=stub` (free) / `LLM_MODE=live` (NVIDIA)
 
 ## Project Layout
 
@@ -77,6 +78,25 @@ python main.py
 
 ```bash
 python main.py --live
+```
+
+## Unified Dashboard (Replay + Live)
+
+One app, two modes:
+
+- **Entry point:** `python -m cipher.dashboard.app`
+- **URL:** `http://localhost:8050`
+- **Mode switch:** use `Dashboard Mode` at the top (`Replay` / `Live Training`)
+
+Recommended demo flow:
+
+```bash
+# Terminal 1: run training
+LLM_MODE=stub python -m cipher.training.loop --episodes 50
+
+# Terminal 2: open unified dashboard
+python -m cipher.dashboard.app
+# http://localhost:8050
 ```
 
 ## Verification Commands (Phase 5)

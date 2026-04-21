@@ -23,6 +23,7 @@ from dash import dcc, html, Input, Output, State, callback_context, no_update
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import networkx as nx
+from cipher.dashboard.live import create_live_layout, register_callbacks_on as register_live_callbacks
 from cipher.dashboard.replay import (
     infer_runtime_mode,
     extract_trap_steps,
@@ -1111,6 +1112,7 @@ app = dash.Dash(
     title="CIPHER · Episode Replay",
 )
 server = app.server
+register_live_callbacks(app)
 
 # ── Initial dark theme colours (client-side toggle switches between DARK/LIGHT)
 C_INIT = DARK
@@ -1573,6 +1575,40 @@ def make_layout():
     })
 
 
+def make_unified_layout():
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Span("Dashboard Mode", style={"fontSize": "11px", "color": "#94a3b8"}),
+                    dcc.RadioItems(
+                        id="dashboard-mode",
+                        options=[
+                            {"label": "Replay", "value": "replay"},
+                            {"label": "Live Training", "value": "live"},
+                        ],
+                        value="replay",
+                        inline=True,
+                        labelStyle={"marginRight": "16px", "fontSize": "12px"},
+                        inputStyle={"marginRight": "6px"},
+                        style={"color": "#e2e8f0", "fontFamily": "'JetBrains Mono', monospace"},
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "12px",
+                    "padding": "8px 14px",
+                    "background": "#020617",
+                    "borderBottom": "1px solid #1e293b",
+                },
+            ),
+            html.Div(id="replay-container", children=make_layout()),
+            html.Div(id="live-container", children=create_live_layout(), style={"display": "none"}),
+        ]
+    )
+
+
 def _ctrl_btn_style(C):
     return {
         "fontSize": "12px",
@@ -1587,12 +1623,23 @@ def _ctrl_btn_style(C):
     }
 
 
-app.layout = make_layout
+app.layout = make_unified_layout
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CALLBACKS
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@app.callback(
+    Output("replay-container", "style"),
+    Output("live-container", "style"),
+    Input("dashboard-mode", "value"),
+)
+def toggle_dashboard_mode(mode):
+    if mode == "live":
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "block"}, {"display": "none"}
 
 
 @app.callback(

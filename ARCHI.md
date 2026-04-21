@@ -1,6 +1,6 @@
 # CIPHER — Architecture & Build Status
 
-> Last updated: Phase 7 complete (per-step oversight flags + penalties)
+> Last updated: Phase 13 complete (unified dashboard modes + training event/state outputs)
 
 ## Build Status
 
@@ -18,12 +18,12 @@ flowchart TD
     P5["✅ Phase 5\nTrap Layer\nDeception mechanics"]:::done
     P6["✅ Phase 6\nReward Functions\nFull implementation"]:::done
     P7["✅ Phase 7\nOversight Agent\nFleet AI bonus"]:::done
-    P8["🔵 Phase 8\nTraining Loop\nSelf-play + curves"]:::next
+    P8["✅ Phase 8\nTraining Loop\nSelf-play + curves"]:::done
     P9["🔵 Phase 9\nForensics Agent\nOp graph reconstruction"]:::next
     P10["🔵 Phase 10\nAuto-Escalation\nScenario generator"]:::next
     P11["🔵 Phase 11\nEvaluation Suite\nBaseline comparison"]:::next
-    P12["🟡 Phase 12\nEpisode Replay\nDashboard — IN PROGRESS"]:::inprogress
-    P13["⬜ Phase 13\nLive Dashboard\nReal-time training viz"]:::future
+    P12["✅ Phase 12\nEpisode Replay\nDashboard"]:::done
+    P13["✅ Phase 13\nLive Dashboard\nReal-time training viz"]:::done
     P14["⬜ Phase 14\nHuggingFace\nNOT STARTED — awaiting credits"]:::future
     P15["⬜ Phase 15\nPolish & Demo\nPitch preparation"]:::future
 
@@ -92,9 +92,9 @@ flowchart TB
         ESCALATOR["Scenario Escalator\nAdaptive difficulty\nTargets last winner"]
     end
 
-    subgraph DASHBOARD["📺 Dashboard"]
-        D12["Episode Replay — Phase 12 🟡\n5-panel visualization\nStep slider + network map"]
-        D13["Live Training — Phase 13 ⬜\nReal-time reward curves\nLive anomaly feed"]
+    subgraph DASHBOARD["📺 Dashboard (Unified App)"]
+        D12["Replay Mode — Phase 12 ✅\nTrace playback + timeline + network map"]
+        D13["Live Training Mode — Phase 13 ✅\nLive rewards + events + oversight feed"]
     end
 
     subgraph LLM["🤖 LLM Backend — Phase 3 ✅"]
@@ -156,6 +156,8 @@ flowchart LR
 | `ENV_CONTEXT_RESET_INTERVAL` | `40` | Steps between RED memory resets |
 | `ENV_HONEYPOT_DENSITY` | `0.15` | Fraction of nodes that are honeypots |
 | `ENV_DEAD_DROP_MAX_TOKENS` | `512` | Token budget per dead drop |
+| `DASHBOARD_PORT` | `8050` | Unified dashboard app port (Replay + Live modes) |
+| `DASHBOARD_LIVE_UPDATE_INTERVAL` | `2000` | Live mode refresh interval in milliseconds |
 | `ENV_TRAP_BUDGET_RED` | `3` | RED trap placements per episode |
 | `ENV_TRAP_BUDGET_BLUE` | `5` | BLUE trap placements per episode |
 
