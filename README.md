@@ -2,18 +2,22 @@
 
 Adversarial multi-agent environment where RED infiltrates and exfiltrates while BLUE detects, misdirects, and traps.
 
-## Current Implementation Status (Problem Statement Audit Through Phase 5)
+## Current Build Status
 
-- **Phase 1 — Skeleton and wiring:** complete (`main.py` runs, core modules wired, episode loop active).
-- **Phase 2 — Enterprise network + asymmetric observations:** complete (50-node graph, zones, role-asymmetric observations, suspicion/anomaly mechanics, tests).
-- **Phase 3 — Dead drop / MEMENTO layer:** complete (dead drop schema, integrity hash verification, vault read/write and discovery path support).
-- **Phase 4 — NVIDIA LLM integration + prompts:** complete (LLM client, model-key routing, 8 prompt templates, robust action parsing, retry/backoff logic).
-- **Phase 5 — Trap layer + deception mechanics:** complete (trap registry, RED/BLUE trap types, budget enforcement, expiry/trigger handling, dead-drop tamper flow, episode-runner integration, runtime trap events).
+| Phase | What | Status |
+|-------|------|--------|
+| 1 — Skeleton | Project structure, 8 stub agents, dead drops | ✅ Complete |
+| 2 — Environment | 50-node zone-based network, suspicion mechanics | ✅ Complete |
+| 3 — LLM Integration | NVIDIA NIM, real agent reasoning | ✅ Complete |
+| 4 — Agent Prompting | 8 specialized prompt templates, action parsing | ✅ Complete |
+| 5 — Trap Layer | FalseTrail, HoneypotPoison, DeadDropTamper | ✅ Complete |
+| 6 — Reward Functions | Full continuous rewards, reward_logger.py | ✅ Complete |
+| 7 — Oversight Agent | OversightAuditor (9th agent), fleet bonus | ✅ Complete |
+| 8 — Training Loop | Self-play, reward curves | 🔵 Next |
+| 12 — Dashboard | Episode replay visualization | 🟡 In Progress |
+| 14 — HuggingFace | Awaiting compute credits | ⬜ Not Started |
 
-### Test Status
-
-- Full suite: `111 passed`.
-- Includes Phase 5 trap suite (`tests/test_phase5.py`) with 24 tests.
+Tests passing: **~182** | Reward logging: **rewards_log.csv** | Fleet verdict: per-episode | Modes: `LLM_MODE=stub` (free) / `LLM_MODE=live` (NVIDIA)
 
 ## Project Layout
 
@@ -40,6 +44,25 @@ conda activate cipher
 python -m venv .venv
 . .venv/bin/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+## Quick Start
+
+```bash
+# Stub mode (free, no API calls)
+python main.py
+
+# Live mode (NVIDIA API)
+python main.py --live
+
+# Full test suite
+pytest tests/ -v --tb=short
+
+# Training loop (10 episodes, stub mode)
+LLM_MODE=stub python -m cipher.training.loop --episodes 10
+
+# Disable trace saving (on by default in main.py)
+python main.py --no-trace
 ```
 
 ## Run
@@ -77,3 +100,5 @@ python main.py
 - Keep `LLM_MODE=stub` for offline testing.
 - Trap events are logged as `TRAP EVENT:` lines in episode output.
 - Dead-drop tampering intentionally preserves old integrity hash so RED can detect corruption via `verify() == False`.
+- `main.py` now saves episode traces by default to support Phase 12 dashboard replay testing.
+- Use `--no-trace` only when you explicitly want to skip trace file generation.

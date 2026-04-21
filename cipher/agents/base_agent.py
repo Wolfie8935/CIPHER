@@ -474,6 +474,35 @@ class BaseAgent(ABC):
         reasoning = data.get("reasoning", "")
         trap_params = data.get("trap_params") or data.get("trap_payload") or {}
 
+        # EXFIL semantic guardrail: require a plausible file name target.
+        if action_type == ActionType.EXFILTRATE:
+            invalid_exfil_target = False
+            if target_file is None:
+                invalid_exfil_target = True
+            elif not isinstance(target_file, str):
+                invalid_exfil_target = True
+            else:
+                target_file = target_file.strip()
+                if not target_file:
+                    invalid_exfil_target = True
+                # Common malformed patterns: numeric IDs or node-like aliases.
+                if target_file.isdigit() or target_file.lower().startswith("node_"):
+                    invalid_exfil_target = True
+            if invalid_exfil_target:
+                logger.warning(
+                    f"{self.agent_id}: Invalid EXFILTRATE semantics "
+                    f"(target_file={target_file!r}). Falling back to {fallback_type.value}."
+                )
+                action_type = fallback_type
+                target_file = None
+                if not reasoning:
+                    reasoning = (
+                        "Invalid EXFILTRATE target_file semantics — "
+                        "falling back to safe action."
+                    )
+            # Normalize EXFIL action shape: file-based target only.
+            target_node = None
+
         if not self._is_trap_action_allowed(action_type, target_node):
             action_type = fallback_type
 

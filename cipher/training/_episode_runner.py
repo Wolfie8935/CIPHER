@@ -12,7 +12,9 @@ or reward function definitions.
 from __future__ import annotations
 
 import json
+import os
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from cipher.agents.blue.deception_architect import BlueDeceptionArchitect
 from cipher.agents.blue.forensics import BlueForensics
 from cipher.agents.blue.surveillance import BlueSurveillance
 from cipher.agents.blue.threat_hunter import BlueThreatHunter
+from cipher.agents.oversight.auditor import OversightAuditor
 from cipher.agents.red.analyst import RedAnalyst
 from cipher.agents.red.exfiltrator import RedExfiltrator
 from cipher.agents.red.operative import RedOperative
@@ -50,13 +53,15 @@ from cipher.environment.traps import (
 )
 from cipher.memory.dead_drop import DeadDropVault, build_dead_drop_from_state
 from cipher.rewards.blue_reward import compute_blue_reward
-from cipher.rewards.oversight_reward import compute_oversight_signal
+from cipher.rewards.oversight_reward import apply_fleet_bonus, compute_oversight_signal
+from cipher.rewards.reward_logger import RewardLogger
 from cipher.rewards.red_reward import compute_red_reward
 from cipher.utils.config import config
 from cipher.utils.logger import get_logger
 
 logger = get_logger(__name__)
 console = Console(force_terminal=True)
+_EPISODE_HISTORY: list[dict[str, Any]] = []
 
 RED_TRAP_ACTIONS = {
     ActionType.PLANT_FALSE_TRAIL,
@@ -84,6 +89,24 @@ BLUE_ACTION_TO_TRAP = {
 }
 
 
+@dataclass
+class ActionExecutionResult:
+    """Structured action execution outcome for episode traces."""
+
+    success: bool
+    reason: str
+    state_delta: dict[str, Any]
+
+    def to_dict(self, **extras: Any) -> dict[str, Any]:
+        base = {
+            "success": self.success,
+            "reason": self.reason,
+            "state_delta": self.state_delta,
+        }
+        base.update(extras)
+        return base
+
+
 def run_episode(
     scenario: Any | None = None,
     graph: Any | None = None,
@@ -92,6 +115,10 @@ def run_episode(
     verbose: bool = True,
     save_trace: bool = False,
     episode_number: int = 1,
+    debug_force_exfil_sanity: bool = False,
+    debug_trace_state: bool = False,
+    scripted_red_actions: dict[int, list[Action]] | None = None,
+    scripted_blue_actions: dict[int, list[Action]] | None = None,
 ) -> Any:
     """
     Run a single CIPHER episode.
@@ -178,11 +205,39 @@ def run_episode(
         BlueDeceptionArchitect("blue_deception_architect_01", cfg),
         BlueForensics("blue_forensics_01", cfg),
     ]
+    oversight_auditor = OversightAuditor(cfg)
+    forensics_agent = blue_agents[-1]
 
     # Track metrics
-    vault_efficiency_total = 0.0
-    vault_writes = 0
     steps_to_first_detection: int | None = None
+    confirmed_detection_step: int | None = None
+    action_reason_mismatch_count = 0
+
+    if debug_force_exfil_sanity:
+        state.red_current_node = scenario.high_value_target_node
+        if state.red_current_node not in state.red_path_history:
+            state.red_path_history.append(state.red_current_node)
+        if state.red_current_node not in state.red_visited_nodes:
+            state.red_visited_nodes.append(state.red_current_node)
+        sanity_target = scenario.target_files[0]
+        sanity_action = Action(
+            agent_id="debug_exfil_sanity",
+            action_type=ActionType.EXFILTRATE,
+            target_file=sanity_target,
+            reasoning="Forced exfil sanity check.",
+        )
+        sanity_result = _process_red_action(
+            sanity_action,
+            state,
+            vault,
+            scenario,
+            exfil_success_this_step=False,
+        )
+        if len(state.red_exfiltrated_files) == 0:
+            raise AssertionError(
+                "DEBUG_EXFIL sanity failed: exfiltration did not update state.red_exfiltrated_files"
+            )
+        logger.debug("DEBUG_EXFIL sanity passed: %s", sanity_result)
 
     # ── Print startup banner ─────────────────────────────────────
     if verbose:
@@ -227,18 +282,33 @@ def run_episode(
         red_planner_action: Action | None = None
 
         # ── RED agents act ───────────────────────────────────────
-        for agent in red_agents:
-            agent.observe(red_obs)
-            action = agent.act()
+        red_abort_triggered = False
+        exfil_success_this_step = False
+        scripted_red = scripted_red_actions.get(step) if scripted_red_actions else None
+        if scripted_red is not None:
+            red_action_stream: list[Action] = scripted_red
+        else:
+            red_action_stream = []
+            for agent in red_agents:
+                agent.observe(red_obs)
+                red_action_stream.append(agent.act())
+
+        for action in red_action_stream:
             action.step = step
             red_actions.append(action)
-            if isinstance(agent, RedPlanner):
+            if action.agent_id.startswith("red_planner"):
                 red_planner_action = action
 
-            result = _process_red_action(action, state, vault, scenario)
-            if action.action_type == ActionType.WRITE_DEAD_DROP:
-                vault_writes += 1
-                vault_efficiency_total += result.get("memory_efficiency", 1.0)
+            result = _process_red_action(
+                action,
+                state,
+                vault,
+                scenario,
+                exfil_success_this_step=exfil_success_this_step,
+            )
+            if result.get("reason", "").startswith("exfil_"):
+                exfil_success_this_step = result.get("success", False) or exfil_success_this_step
+
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
@@ -250,20 +320,54 @@ def run_episode(
                 },
                 result=result,
             )
+            if debug_trace_state or os.getenv("DEBUG_EXFIL", "0") == "1":
+                logger.debug(
+                    "EXFIL STATE step=%s after %s: %s",
+                    step,
+                    action.agent_id,
+                    list(state.red_exfiltrated_files),
+                )
             if verbose:
                 _print_action(step, action, state, "red")
+            if state.terminal_reason == "aborted":
+                red_abort_triggered = True
+                break
+
+        if red_abort_triggered:
+            logger.debug("ABORT triggered: skipping BLUE actions for step %s", step)
+            break
 
         # ── BLUE agents act ──────────────────────────────────────
-        for agent in blue_agents:
-            setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
-            agent.observe(blue_obs)
-            action = agent.act()
+        scripted_blue = scripted_blue_actions.get(step) if scripted_blue_actions else None
+        if scripted_blue is not None:
+            blue_action_stream: list[Action] = scripted_blue
+        else:
+            blue_action_stream = []
+            for agent in blue_agents:
+                setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
+                agent.observe(blue_obs)
+                blue_action_stream.append(agent.act())
+
+        for action in blue_action_stream:
             action.step = step
             blue_actions.append(action)
 
             result = _process_blue_action(action, state)
+            mismatch_reason = _detect_action_reason_mismatch(action)
+            if mismatch_reason:
+                action_reason_mismatch_count += 1
+                result["action_reason_mismatch"] = mismatch_reason
+                logger.warning(
+                    "Action-reason mismatch (%s): agent=%s action=%s reasoning=%s",
+                    mismatch_reason,
+                    action.agent_id,
+                    action.action_type.value,
+                    action.reasoning[:120],
+                )
             if steps_to_first_detection is None and state.blue_detection_confidence > 0.5:
                 steps_to_first_detection = step
+            if confirmed_detection_step is None and state.blue_detection_confidence >= 0.8:
+                confirmed_detection_step = step
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
@@ -341,26 +445,76 @@ def run_episode(
             state.terminal_reason = "max_steps"
 
     # ── Compute rewards ──────────────────────────────────────────
-    avg_vault_eff = (
-        vault_efficiency_total / vault_writes if vault_writes > 0 else 1.0
+    setattr(state, "blue_first_detection_step", steps_to_first_detection)
+    setattr(state, "blue_confirmed_detection_step", confirmed_detection_step)
+
+    red_reward = compute_red_reward(state, scenario, vault, cfg)
+    blue_reward = compute_blue_reward(state, graph, forensics_agent, cfg)
+    oversight = compute_oversight_signal(state, _EPISODE_HISTORY, cfg)
+
+    red_reward.total += oversight.total_red_adjustment
+    blue_reward.total += oversight.total_blue_adjustment
+
+    red_action_log = []
+    blue_action_log = []
+    for entry in state.episode_log:
+        agent_id = str(entry.get("agent_id", ""))
+        if not (agent_id.startswith("red_") or agent_id.startswith("blue_")):
+            continue
+        payload = entry.get("payload", {})
+        log_item = {
+            "step": entry.get("step", 0),
+            "agent": agent_id,
+            "action": entry.get("action_type", ""),
+            "target": payload.get("target_node") if isinstance(payload, dict) else None,
+            "reasoning": payload.get("reasoning", "") if isinstance(payload, dict) else "",
+        }
+        if agent_id.startswith("red_"):
+            red_action_log.append(log_item)
+        else:
+            blue_action_log.append(log_item)
+
+    judgment = oversight_auditor.judge_episode(state, red_action_log, blue_action_log)
+    apply_fleet_bonus(red_reward, blue_reward, judgment)
+
+    red_reward.total = round(red_reward.total, 4)
+    blue_reward.total = round(blue_reward.total, 4)
+
+    logger_instance = RewardLogger()
+    logger_instance.log(
+        episode=episode_number,
+        steps=state.step,
+        terminal_reason=state.terminal_reason or "max_steps",
+        red=red_reward,
+        blue=blue_reward,
+        oversight=oversight,
+        judgment=judgment,
     )
 
-    red_reward = compute_red_reward(state, vault_efficiency=avg_vault_eff)
-    blue_reward = compute_blue_reward(state, steps_to_first_detection)
-    oversight = compute_oversight_signal(state)
+    _EPISODE_HISTORY.append(
+        {
+            "episode": episode_number,
+            "red_complexity_multiplier": red_reward.operation_complexity_multiplier,
+            "red_unique_nodes": red_reward.unique_nodes_visited,
+            "blue_detection_confidence_final": state.blue_detection_confidence,
+        }
+    )
 
     if verbose:
-        _print_rewards(red_reward, blue_reward, oversight)
+        _print_rewards(red_reward, blue_reward, oversight, judgment)
 
     # ── Save trace ───────────────────────────────────────────────
     if save_trace:
         _save_episode_trace(state, episode_number)
 
     result_payload = {
-        "red_reward": red_reward.total,
-        "blue_reward": blue_reward.total,
+        "red_reward": red_reward,
+        "blue_reward": blue_reward,
+        "oversight": oversight,
+        "judgment": judgment,
         "state": state,
         "scenario": scenario,
+        "action_reason_mismatch_count": action_reason_mismatch_count,
     }
     if return_payload_mode:
         return result_payload
@@ -372,9 +526,14 @@ def _process_red_action(
     state: EpisodeState,
     vault: DeadDropVault,
     scenario: Any,
+    exfil_success_this_step: bool = False,
 ) -> dict[str, Any]:
     """Process a RED team action and update state accordingly."""
-    result: dict[str, Any] = {"success": True}
+    result = ActionExecutionResult(
+        success=True,
+        reason="ok",
+        state_delta={},
+    ).to_dict()
 
     if action.action_type == ActionType.MOVE:
         if action.target_node is not None and state.graph.has_edge(
@@ -402,7 +561,7 @@ def _process_red_action(
                 state.blue_detection_confidence = min(
                     1.0, state.blue_detection_confidence + 0.3
                 )
-                result["honeypot_triggered"] = True
+                result["state_delta"]["honeypot_triggered"] = True
         else:
             result["success"] = False
             result["reason"] = "invalid_move"
@@ -412,7 +571,9 @@ def _process_red_action(
             state.red_current_node
         ].get("files", []):
             state.update_suspicion(0.03)
+            result["reason"] = "read_success"
             result["file_read"] = action.target_file
+            result["state_delta"]["file_read"] = action.target_file
         else:
             result["success"] = False
             result["reason"] = "file_not_found"
@@ -423,7 +584,12 @@ def _process_red_action(
             if action.target_file in scenario.target_files:
                 state.red_exfiltrated_files.append(action.target_file)
                 state.update_suspicion(0.15)
+                result["reason"] = "exfil_success"
                 result["exfiltrated"] = action.target_file
+                result["state_delta"]["exfiltrated"] = action.target_file
+                result["state_delta"]["red_exfiltrated_files"] = list(
+                    state.red_exfiltrated_files
+                )
 
                 # Check if all target files exfiltrated
                 if set(scenario.target_files).issubset(
@@ -431,12 +597,15 @@ def _process_red_action(
                 ):
                     state.is_terminal = True
                     state.terminal_reason = "exfiltration_complete"
+                    result["reason"] = "exfil_complete"
             else:
                 result["success"] = False
                 result["reason"] = "not_a_target_file"
+                result["state_delta"]["target_file"] = action.target_file
         else:
             result["success"] = False
             result["reason"] = "not_at_hvt"
+            result["state_delta"]["current_node"] = state.red_current_node
 
     elif action.action_type == ActionType.WRITE_DEAD_DROP:
         from cipher.environment.observation import RedObservation
@@ -451,21 +620,34 @@ def _process_red_action(
         file_path, efficiency = vault.write(drop, state.red_current_node)
         state.dead_drops_on_disk.append(file_path)
         state.update_suspicion(0.01)
+        result["reason"] = "drop_written"
         result["drop_path"] = file_path
         result["memory_efficiency"] = efficiency
+        result["state_delta"]["drop_path"] = file_path
+        result["state_delta"]["memory_efficiency"] = efficiency
 
     elif action.action_type == ActionType.READ_DEAD_DROP:
         drops = vault.read(state.red_current_node)
+        result["reason"] = "drop_read"
         result["drops_found"] = len(drops)
         result["drops_valid"] = sum(1 for d in drops if d.verify())
+        result["state_delta"]["drops_found"] = len(drops)
+        result["state_delta"]["drops_valid"] = sum(1 for d in drops if d.verify())
 
     elif action.action_type == ActionType.WAIT:
         # Suspicion decays slightly when waiting
         state.update_suspicion(-0.02)
+        result["reason"] = "wait_decay"
 
     elif action.action_type == ActionType.ABORT:
-        state.is_terminal = True
-        state.terminal_reason = "aborted"
+        if exfil_success_this_step:
+            # Deterministic precedence: successful EXFIL in this step outranks ABORT.
+            result["success"] = False
+            result["reason"] = "abort_ignored_exfil_priority"
+        else:
+            state.is_terminal = True
+            state.terminal_reason = "aborted"
+            result["reason"] = "abort_applied"
 
     elif action.action_type in (
         ActionType.PLANT_FALSE_TRAIL,
@@ -475,7 +657,9 @@ def _process_red_action(
         ActionType.PLANT_TRAP,
     ):
         # Placement is routed centrally in the episode loop.
+        result["reason"] = "trap_action_queued"
         result["trap_action_queued"] = True
+        result["state_delta"]["trap_action_queued"] = True
 
     return result
 
@@ -485,7 +669,11 @@ def _process_blue_action(
     state: EpisodeState,
 ) -> dict[str, Any]:
     """Process a BLUE team action and update state accordingly."""
-    result: dict[str, Any] = {"success": True}
+    result = ActionExecutionResult(
+        success=True,
+        reason="ok",
+        state_delta={},
+    ).to_dict()
 
     if action.action_type == ActionType.INVESTIGATE_NODE:
         if action.target_node is not None:
@@ -494,19 +682,24 @@ def _process_blue_action(
                 state.blue_detection_confidence = min(
                     1.0, state.blue_detection_confidence + 0.2
                 )
+                result["reason"] = "investigate_hit"
                 result["found_red"] = True
+                result["state_delta"]["found_red"] = True
             else:
                 # Small confidence bump for investigating (general awareness)
                 state.blue_detection_confidence = min(
                     1.0, state.blue_detection_confidence + 0.02
                 )
+                result["reason"] = "investigate_miss"
                 result["found_red"] = False
+                result["state_delta"]["found_red"] = False
 
     elif action.action_type == ActionType.ANALYZE_ANOMALY:
         # Slight confidence increase from analysis
         state.blue_detection_confidence = min(
             1.0, state.blue_detection_confidence + 0.01
         )
+        result["reason"] = "analyze_anomaly"
 
     elif action.action_type == ActionType.TRIGGER_ALERT:
         # Use new Phase 2 tracking method
@@ -518,9 +711,13 @@ def _process_blue_action(
             )
             state.is_terminal = True
             state.terminal_reason = "detected"
+            result["reason"] = "alert_correct_detected"
             result["correct_alert"] = True
+            result["state_delta"]["correct_alert"] = True
         else:
+            result["reason"] = "alert_false_positive"
             result["correct_alert"] = False
+            result["state_delta"]["correct_alert"] = False
             # False alert — slight confidence decrease
             state.blue_detection_confidence = max(
                 0.0, state.blue_detection_confidence - 0.05
@@ -528,10 +725,12 @@ def _process_blue_action(
 
     elif action.action_type == ActionType.RECONSTRUCT_PATH:
         # Stub — contributes to reconstruction score in Phase 9
+        result["reason"] = "reconstruct_path"
         result["stub"] = True
+        result["state_delta"]["stub"] = True
 
     elif action.action_type == ActionType.STAND_DOWN:
-        pass  # No effect
+        result["reason"] = "stand_down"
 
     elif action.action_type in (
         ActionType.PLACE_HONEYPOT,
@@ -542,9 +741,24 @@ def _process_blue_action(
         ActionType.DEPLOY_BREADCRUMB,
         ActionType.DEPLOY_FALSE_ESCALATION,
     ):
+        result["reason"] = "trap_action_queued"
         result["trap_action_queued"] = True
+        result["state_delta"]["trap_action_queued"] = True
 
     return result
+
+
+def _detect_action_reason_mismatch(action: Action) -> str | None:
+    """
+    Detect obvious action/reason inconsistencies for diagnostics.
+    """
+    if action.action_type != ActionType.STAND_DOWN:
+        return None
+    reasoning = (action.reasoning or "").lower()
+    trap_intent_terms = ("place", "honeypot", "breadcrumb", "trap", "tamper", "deploy")
+    if any(term in reasoning for term in trap_intent_terms):
+        return "stand_down_with_trap_intent"
+    return None
 
 
 def _apply_trap_effect(effect: Any, state: Any, blue_obs: Any) -> None:
@@ -666,7 +880,7 @@ def _print_action(
         console.print(f"           [dim]  └─ {reasoning_display}[/dim]")
 
 
-def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any) -> None:
+def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any, judgment: Any) -> None:
     """Print the episode reward summary using a rich table."""
     console.print()
 
@@ -722,6 +936,14 @@ def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any) -> None:
         )
     else:
         console.print("  [dim]OVERSIGHT: no flags fired[/dim]")
+
+    if judgment is not None:
+        console.print(
+            "  "
+            f"[bold]FLEET VERDICT:[/bold] {judgment.episode_verdict} | "
+            f"RED bonus: {judgment.fleet_bonus_red:+.2f} | "
+            f"BLUE bonus: {judgment.fleet_bonus_blue:+.2f}"
+        )
 
     console.print()
 

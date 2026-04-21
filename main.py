@@ -6,7 +6,7 @@ Phase 3: LLM Integration — Give the Agents Real Brains
 Run this file to verify the system:
   python main.py                  # Single demo episode (stub mode)
   python main.py --episodes 3    # Run 3 episodes
-  python main.py --trace          # Save episode trace JSON
+  python main.py --no-trace       # Disable trace saving
   python main.py --live           # Enable LLM mode (requires valid API key)
 
 Pass condition:
@@ -21,7 +21,7 @@ Pass condition:
 Usage:
   python main.py                  # Single demo episode
   python main.py --episodes 3    # Run 3 episodes
-  python main.py --trace          # Save episode trace JSON
+  python main.py --no-trace       # Disable trace saving
   python main.py --live           # Enable live LLM mode
 """
 from __future__ import annotations
@@ -30,6 +30,8 @@ import argparse
 import io
 import os
 import sys
+from datetime import datetime
+from time import perf_counter
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
@@ -54,7 +56,9 @@ def main() -> None:
         "--steps", type=int, default=10, help="Max steps per episode"
     )
     parser.add_argument(
-        "--trace", action="store_true", help="Save episode trace to disk"
+        "--no-trace",
+        action="store_true",
+        help="Disable episode trace saving (enabled by default for dashboard replay)",
     )
     parser.add_argument(
         "--live", action="store_true",
@@ -92,6 +96,8 @@ def main() -> None:
     from cipher.training._episode_runner import run_episode
 
     for ep_num in range(1, args.episodes + 1):
+        ep_started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        t0 = perf_counter()
         console.print(
             f"[bold bright_cyan]{'═' * 60}[/bold bright_cyan]"
         )
@@ -99,7 +105,16 @@ def main() -> None:
             episode_number=ep_num,
             max_steps=args.steps,
             verbose=True,
-            save_trace=args.trace,
+            save_trace=not args.no_trace,
+        )
+        elapsed_s = perf_counter() - t0
+        winner = "RED" if red_total > blue_total else "BLUE" if blue_total > red_total else "DRAW"
+        winner_style = "red" if winner == "RED" else "blue" if winner == "BLUE" else "yellow"
+        console.print(
+            f"  [dim]Episode {ep_num} started: {ep_started} | duration: {elapsed_s:.2f}s[/dim]"
+        )
+        console.print(
+            f"  [bold]Winner: [{winner_style}]{winner}[/{winner_style}][/bold]"
         )
         console.print(
             f"  [bold]Episode {ep_num} final: "
