@@ -214,3 +214,4 @@ episode,timestamp,steps,terminal_reason,red_total,red_exfil,red_stealth,red_memo
 1,2026-04-21T19:10:36.423229,10,max_steps,0.0,0.0,0.58,1.0,1.9,0.0,-0.0,-0.6974,0.594,0.0,0.75,0.0,0.0526,0.0,0.0,none,10,1,2,0,1.9,contested,Episode completed with baseline strategic activity. Neither side established clear dominance.
 1,2026-04-21T19:31:18.904417,10,aborted,-0.4,0.0,0.46,1.0,1.35,-0.3,-0.0,0.9394,0.678,0.8694,0.0,0.0,0.25,0.0,0.0,none,7,8,0,0,1.35,contested,"RED's operation was compromised due to high suspicion levels, while BLUE demonstrated strategic intent by analyzing anom"
 >>>>>>> 9cdd793 (save changes)
+1,2026-04-21T19:40:06.286224,10,max_steps,0.0,0.0,0.1,1.0,1.95,0.0,-0.0,-0.0424,0.7,0.8521,0.75,0.0,0.1111,0.0,0.0,none,11,1,2,0,1.95,contested,Episode completed with baseline strategic activity. Neither side established clear dominance.
