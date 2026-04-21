@@ -13,18 +13,24 @@ Does NOT run episodes. Only reads from disk.
 """
 
 import json
-import os
 import math
+import re
 from pathlib import Path
 from collections import defaultdict
-from urllib.parse import quote
 
 import dash
 from dash import dcc, html, Input, Output, State, callback_context, no_update
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-import plotly.express as px
 import networkx as nx
+from cipher.dashboard.replay import (
+    infer_runtime_mode,
+    extract_trap_steps,
+    extract_honeypot_trigger_steps,
+    extract_forensics_path,
+    operation_complexity_score,
+    export_replay_html,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COLOUR PALETTES
@@ -91,7 +97,11 @@ TRACES_DIR = Path("episode_traces")
 
 def get_available_traces():
     TRACES_DIR.mkdir(exist_ok=True)
-    return sorted(TRACES_DIR.glob("*.json"), reverse=True)
+    return sorted(
+        TRACES_DIR.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
 
 
 def load_episode(path: str) -> dict:
@@ -240,6 +250,8 @@ def extract_dead_drops(data: dict) -> list[dict]:
     for entry in data.get("episode_log", []):
         if entry.get("event") == "dead_drop_written" or entry.get("dead_drop"):
             dd = entry.get("dead_drop", entry)
+            if not isinstance(dd, dict):
+                continue
             drops.append(
                 {
                     "step": entry.get("step", entry.get("t", "?")),
@@ -256,6 +268,31 @@ def extract_dead_drops(data: dict) -> list[dict]:
 
     # Fallback schema.
     for dd in data.get("dead_drops_on_disk", []):
+        if isinstance(dd, str):
+            try:
+                loaded = json.loads(Path(dd).read_text())
+            except Exception:
+                loaded = {}
+            if isinstance(loaded, dict):
+                objective = str(loaded.get("mission_status", {}).get("primary_objective", ""))
+                node_guess = "?"
+                m = re.search(r"(?:node|NODE)[_-]?(\d+)", objective)
+                if m:
+                    node_guess = int(m.group(1))
+                drops.append(
+                    {
+                        "step": loaded.get("written_at_step", "?"),
+                        "node": node_guess,
+                        "tokens": loaded.get("token_count", 0),
+                        "efficiency": loaded.get("memory_efficiency", 0.0),
+                        "integrity": "valid" if loaded.get("integrity_hash") else "unknown",
+                        "preview": (loaded.get("continuation_directive") or "")[:80],
+                        "written_by": loaded.get("written_by", "RED"),
+                    }
+                )
+            continue
+        if not isinstance(dd, dict):
+            continue
         drops.append(
             {
                 "step": dd.get("step", dd.get("created_step", "?")),
@@ -320,6 +357,8 @@ def extract_actions(data: dict) -> list[dict]:
         agent_id = str(entry.get("agent_id", ""))
         action_type = str(entry.get("action_type", "?")).upper()
         payload = entry.get("payload", {}) or {}
+        if not isinstance(payload, dict):
+            payload = {}
         result = entry.get("result", {}) or {}
         if not isinstance(result, dict):
             result = {"success": True, "detail": str(result)}
@@ -349,6 +388,8 @@ def extract_actions(data: dict) -> list[dict]:
 
     # Include trap events when present.
     for evt in data.get("trap_events_log", data.get("traps_triggered_log", [])):
+        if not isinstance(evt, dict):
+            continue
         actions.append(
             {
                 "step": evt.get("step", "?"),
@@ -371,7 +412,44 @@ def extract_rewards(data: dict) -> dict:
             "complexity", "abort_pen", "hp_pen", "red_total", "blue_total",
         ]
         r = {k: data.get(k, 0.0) for k in keys if k in data}
-    return r
+    if r:
+        return r
+
+    # Fallback schema: infer a reasonable reward breakdown from available episode metrics.
+    terminal_reason = str(data.get("terminal_reason", "")).lower()
+    red_exfil_files = data.get("red_exfiltrated_files", []) or []
+    red_creds = data.get("red_credentials_acquired", []) or []
+    trap_events = data.get("trap_events_log", data.get("traps_triggered_log", [])) or []
+    red_susp = float(data.get("red_suspicion_score", 0.0) or 0.0)
+    blue_conf = float(data.get("blue_detection_confidence", 0.0) or 0.0)
+    resets = int(data.get("red_context_resets", 0) or 0)
+    hp_triggered = data.get("blue_honeypots_triggered", []) or []
+    blue_fp = float(data.get("blue_false_positives", 0) or 0.0)
+
+    exfil = 0.35 * len(red_exfil_files)
+    stealth = 0.6 - red_susp
+    memory = -0.08 * resets
+    complexity = 0.10 * len(red_creds) + 0.05 * len(trap_events)
+    abort_pen = -0.5 if "abort" in terminal_reason else 0.0
+    hp_pen = -0.15 * len(hp_triggered)
+    red_total = exfil + stealth + memory + complexity + abort_pen + hp_pen
+
+    detect_bonus = 0.9 if "detect" in terminal_reason else 0.0
+    confidence_bonus = 0.2 * blue_conf
+    honeypot_bonus = 0.12 * len(hp_triggered)
+    fp_pen = -0.10 * blue_fp
+    blue_total = detect_bonus + confidence_bonus + honeypot_bonus + fp_pen
+
+    return {
+        "exfil": exfil,
+        "stealth": stealth,
+        "memory": memory,
+        "complexity": complexity,
+        "abort_pen": abort_pen,
+        "hp_pen": hp_pen,
+        "red_total": red_total,
+        "blue_total": blue_total,
+    }
 
 
 def build_graph_layout(data: dict) -> tuple[nx.Graph, dict]:
@@ -469,6 +547,7 @@ def get_summary(data: dict) -> dict:
         "resets": len(resets),
         "oversight": oversight if oversight else ["no flags fired"],
         "fleet_verdict": data.get("fleet_verdict", data.get("judgment", {})),
+        "complexity": operation_complexity_score(data),
     }
 
 
@@ -504,6 +583,7 @@ def build_network_figure(data: dict, step: int, C: dict) -> go.Figure:
         path_up_to = red_path[: step + 1] if step < len(red_path) else red_path
     red_current = path_up_to[-1] if path_up_to else None
     red_visited = set(path_up_to)
+    forensics_path = extract_forensics_path(data)
 
     # Honeypot and BLUE investigated nodes
     honeypots = set()
@@ -553,6 +633,36 @@ def build_network_figure(data: dict, step: int, C: dict) -> go.Figure:
                     mode="lines",
                     line=dict(width=2.5 + 1.5 * intensity, color=color),
                     hoverinfo="none", showlegend=False,
+                )
+            )
+
+    # ── BLUE Forensics reconstructed path overlay
+    if len(forensics_path) > 1:
+        f_nodes = []
+        moves_by_step = {int(m.get("step", 0) or 0): m for m in moves if isinstance(m, dict)}
+        # Limit overlay to current playback step using movement chronology.
+        if moves_by_step:
+            for st in sorted(moves_by_step.keys()):
+                if st > step:
+                    continue
+                mv = moves_by_step[st]
+                if mv.get("to_node") is not None:
+                    f_nodes.append(int(mv.get("to_node")))
+        if not f_nodes:
+            f_nodes = forensics_path[: max(1, min(step + 1, len(forensics_path)))]
+        for i in range(len(f_nodes) - 1):
+            a, b = f_nodes[i], f_nodes[i + 1]
+            if a not in pos or b not in pos:
+                continue
+            traces.append(
+                go.Scatter(
+                    x=[pos[a][0], pos[b][0]],
+                    y=[pos[a][1], pos[b][1]],
+                    mode="lines",
+                    name="Forensics Path" if i == 0 else None,
+                    line=dict(width=1.8, color=C["blue"], dash="dot"),
+                    hoverinfo="none",
+                    showlegend=(i == 0),
                 )
             )
 
@@ -663,6 +773,51 @@ def build_network_figure(data: dict, step: int, C: dict) -> go.Figure:
             )
         )
 
+    # ── Trap event markers and false-trail chase arrows
+    trap_nodes = []
+    false_trail_arrows = []
+    for evt in data.get("trap_events_log", data.get("traps_triggered_log", [])):
+        if not isinstance(evt, dict):
+            continue
+        st = evt.get("step", 0)
+        if isinstance(st, int) and st > step:
+            continue
+        state_changes = evt.get("state_changes", {}) or {}
+        if isinstance(state_changes, dict):
+            n = state_changes.get("fake_node", state_changes.get("node", state_changes.get("target_node")))
+            if isinstance(n, (int, float, str)) and str(n).isdigit():
+                trap_nodes.append(int(n))
+            if "fake_node" in state_changes and red_current is not None and red_current in pos:
+                fn = state_changes.get("fake_node")
+                if isinstance(fn, (int, float, str)) and str(fn).isdigit() and int(fn) in pos:
+                    false_trail_arrows.append((red_current, int(fn)))
+
+    if trap_nodes:
+        tx = [pos[n][0] for n in trap_nodes if n in pos]
+        ty = [pos[n][1] for n in trap_nodes if n in pos]
+        traces.append(
+            go.Scatter(
+                x=tx, y=ty, mode="markers+text",
+                name="Trap Events",
+                marker=dict(size=12, color=C["purple"], symbol="x", opacity=0.95),
+                text=["⚡"] * len(tx),
+                textposition="middle center",
+                hoverinfo="none", showlegend=True,
+            )
+        )
+    for idx, (src, dst) in enumerate(false_trail_arrows):
+        traces.append(
+            go.Scatter(
+                x=[pos[src][0], pos[dst][0]],
+                y=[pos[src][1], pos[dst][1]],
+                mode="lines",
+                name="False-Trail Chase" if idx == 0 else None,
+                line=dict(width=1.5, color=C["yellow"], dash="dash"),
+                hoverinfo="none",
+                showlegend=(idx == 0),
+            )
+        )
+
     # ── RED position pulse
     if red_current is not None and red_current in pos:
         rx, ry = pos[red_current]
@@ -722,6 +877,8 @@ def build_timeline_figure(
 
     steps, red_vals, blue_vals = extract_timeline(data)
     resets = extract_context_resets(data)
+    honeypot_steps = extract_honeypot_trigger_steps(data)
+    trap_steps = extract_trap_steps(data)
 
     shapes = []
     annotations = []
@@ -741,6 +898,8 @@ def build_timeline_figure(
 
     # MEMENTO lines
     for rs in resets:
+        if not isinstance(rs, int) or rs <= 0:
+            continue
         shapes.append(dict(
             type="line", x0=rs, x1=rs, y0=0, y1=1,
             line=dict(color=C["purple"], width=1.5, dash="dash"),
@@ -761,6 +920,24 @@ def build_timeline_figure(
                 font=dict(size=8, color=C["red"]),
                 showarrow=True, arrowhead=2,
                 arrowcolor=C["red"], ay=-25,
+            ))
+
+    # Honeypot trigger annotations
+    for hs in honeypot_steps:
+        if steps and hs <= max(steps):
+            annotations.append(dict(
+                x=hs, y=0.9, text="✅",
+                font=dict(size=12, color=C["green"]),
+                showarrow=True, arrowhead=1, arrowcolor=C["green"], ay=-18,
+            ))
+
+    # Trap event annotations
+    for ts in trap_steps:
+        if steps and ts <= max(steps):
+            annotations.append(dict(
+                x=ts, y=0.72, text="⚡",
+                font=dict(size=11, color=C["purple"]),
+                showarrow=False,
             ))
 
     # Step cursor
@@ -828,27 +1005,48 @@ def build_reward_figure(rewards: dict, C: dict) -> go.Figure:
     fig = go.Figure()
     if any(v != 0 for v in vals):
         fig.add_trace(go.Bar(
-            x=labels, y=vals,
+            y=labels, x=vals,
+            orientation="h",
             marker_color=colors,
             name="RED Components",
-            hovertemplate="%{x}: %{y:.3f}<extra></extra>",
+            text=[f"{v:+.2f}" for v in vals],
+            textposition="auto",
+            hovertemplate="%{y}: %{x:.3f}<extra></extra>",
         ))
     else:
         # Fallback: just show red vs blue totals
         fig.add_trace(go.Bar(
-            x=["RED Total", "BLUE Total"],
-            y=[red_total, blue_total],
+            y=["RED Total", "BLUE Total"],
+            x=[red_total, blue_total],
+            orientation="h",
             marker_color=[C["red"], C["blue"]],
+            text=[f"{red_total:+.2f}", f"{blue_total:+.2f}"],
+            textposition="auto",
+            hovertemplate="%{y}: %{x:.3f}<extra></extra>",
         ))
+
+    y_vals = vals + [red_total, blue_total]
+    max_abs = max([abs(v) for v in y_vals] + [0.5])
+    y_lim = min(3.0, max(1.1, max_abs * 1.2))
 
     fig.update_layout(
         template=C["plotly_tmpl"],
         paper_bgcolor=C["plot_bg"],
         plot_bgcolor=C["plot_bg"],
-        margin=dict(l=30, r=10, t=10, b=50),
+        margin=dict(l=86, r=10, t=6, b=12),
         showlegend=False,
-        xaxis=dict(tickangle=-30, tickfont=dict(size=9)),
-        yaxis=dict(title="Value", range=[-1.1, 1.1]),
+        xaxis=dict(
+            title="Value",
+            range=[-y_lim, y_lim],
+            tickfont=dict(size=9),
+            zeroline=True,
+            zerolinecolor=C["border"],
+            automargin=True,
+        ),
+        yaxis=dict(
+            tickfont=dict(size=8),
+            automargin=True,
+        ),
         bargap=0.25,
     )
     return fig
@@ -908,23 +1106,11 @@ app = dash.Dash(
         dbc.themes.BOOTSTRAP,
         "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap",
     ],
+    assets_folder=str(Path(__file__).parent / "assets"),
     suppress_callback_exceptions=True,
     title="CIPHER · Episode Replay",
 )
 server = app.server
-
-# ── Global CSS injected via inline style on root div
-GLOBAL_CSS = """
-  * { box-sizing: border-box; }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #2a3550; border-radius: 3px; }
-  body { margin: 0; padding: 0; transition: background 0.3s; }
-  .action-log-scroll { overflow-y: auto; max-height: 320px; }
-  .action-log-scroll::-webkit-scrollbar-thumb { background: #2a3550; }
-  .slider-container .rc-slider-track { background: #ff4444 !important; }
-  .slider-container .rc-slider-handle { border-color: #ff4444 !important; }
-"""
 
 # ── Initial dark theme colours (client-side toggle switches between DARK/LIGHT)
 C_INIT = DARK
@@ -942,12 +1128,6 @@ def make_layout():
         dcc.Store(id="episode-data-store", data={}),
         dcc.Store(id="autoplay-store", data=False),
         dcc.Interval(id="autoplay-interval", interval=1200, disabled=True),
-
-        # ── Injected CSS
-        html.Link(
-            rel="stylesheet",
-            href=f"data:text/css;charset=utf-8,{quote(GLOBAL_CSS)}",
-        ),
 
         # ══════════ TOP BAR ══════════
         html.Div([
@@ -971,6 +1151,7 @@ def make_layout():
                 }),
                 dcc.Dropdown(
                     id="episode-dropdown",
+                    className="dashboard-dropdown",
                     options=trace_options,
                     value=str(traces[0]) if traces else None,
                     placeholder="No traces found — run python main.py",
@@ -979,9 +1160,9 @@ def make_layout():
                         "width": "clamp(180px, 32vw, 320px)",
                         "fontSize": "12px",
                         "fontFamily": "'JetBrains Mono', monospace",
-                        "backgroundColor": C["surface2"],
-                        "color": C["text"],
-                        "border": f"1px solid {C['border']}",
+                        "backgroundColor": "#f8fafc",
+                        "color": "#0f172a",
+                        "border": "1px solid #94a3b8",
                         "borderRadius": "6px",
                     },
                 ),
@@ -991,7 +1172,7 @@ def make_layout():
             html.Div([
                 # LLM mode badge
                 html.Div(
-                    f"● {os.environ.get('LLM_MODE', 'stub').upper()} MODE",
+                    f"● {infer_runtime_mode({})}",
                     id="mode-badge",
                     style={
                         "fontSize": "10px",
@@ -1039,6 +1220,47 @@ def make_layout():
             "justifyContent": "space-between",
             "flexWrap": "wrap",
             "rowGap": "8px",
+        }),
+
+        # Judge definitions panel (Phase 12 requirement)
+        html.Details([
+            html.Summary(
+                "Replay Definitions (for judges) — what each signal means",
+                style={
+                    "cursor": "pointer",
+                    "fontFamily": "'JetBrains Mono', monospace",
+                    "fontSize": "11px",
+                    "color": C["text"],
+                    "fontWeight": "600",
+                    "outline": "none",
+                },
+            ),
+            html.Div([
+                html.Div("🔴 RED Path: the actual operation route RED traversed over time."),
+                html.Div("🔵 BLUE Confidence: BLUE team's detection confidence curve by step."),
+                html.Div("📦 Dead Drop: RED memory artifact written for post-reset continuation."),
+                html.Div("⚡ Trap Event: triggered deception/trap interaction in the episode."),
+                html.Div("✅ Honeypot Trigger: BLUE deception successfully lured RED into a honeypot."),
+                html.Div("Dashed Purple Line: a context reset boundary for RED's memory window."),
+                html.Div("Dashed Yellow Link: false-trail chase away from RED's actual route."),
+                html.Div("Dotted Blue Overlay: Forensics reconstructed RED path from sparse evidence."),
+                html.Div("Complexity Score: operation depth estimate from path breadth, traps, and reset survival."),
+            ], style={
+                "display": "grid",
+                "gridTemplateColumns": "repeat(auto-fit, minmax(260px, 1fr))",
+                "gap": "6px 14px",
+                "fontSize": "10px",
+                "fontFamily": "'JetBrains Mono', monospace",
+                "color": C["text_dim"],
+                "marginTop": "8px",
+                "lineHeight": "1.5",
+            }),
+        ], open=False, style={
+            "padding": "8px 14px",
+            "borderBottom": f"1px solid {C['border']}",
+            "background": C["bg"],
+            "maxHeight": "180px",
+            "overflowY": "auto",
         }),
 
         # ══════════ NO TRACES WARNING ══════════
@@ -1108,14 +1330,15 @@ def make_layout():
                     dcc.Graph(
                         id="reward-chart",
                         config={"displayModeBar": False},
-                        style={"height": "160px"},
+                        style={"height": "190px"},
                     ),
                     html.Div(id="reward-totals", style={
                         "fontFamily": "'JetBrains Mono', monospace",
-                        "fontSize": "11px",
+                        "fontSize": "10px",
                         "display": "flex",
                         "justifyContent": "space-around",
-                        "marginTop": "4px",
+                        "marginTop": "0px",
+                        "paddingTop": "2px",
                     }),
                 ], C),
 
@@ -1185,45 +1408,82 @@ def make_layout():
                         title="Jump to end",
                         style=_ctrl_btn_style(C),
                     ),
-                    dcc.Slider(
-                        id="step-slider",
-                        min=0, max=1, step=1, value=0,
-                        marks=None,
-                        tooltip={"always_visible": True, "placement": "top"},
-                        updatemode="drag",
-                        className="slider-container",
+                    html.Button(
+                        "↺ RESET", id="btn-jump-reset",
+                        title="Jump to next context reset",
+                        style={**_ctrl_btn_style(C), "color": C["purple"], "border": f"1px solid {C['purple']}"},
+                    ),
+                    html.Button(
+                        "⚡ TRAP", id="btn-jump-trap",
+                        title="Jump to next trap event",
+                        style={**_ctrl_btn_style(C), "color": C["yellow"], "border": f"1px solid {C['yellow']}"},
+                    ),
+                    html.Div(
+                        dcc.Slider(
+                            id="step-slider",
+                            min=0, max=1, step=1, value=0,
+                            marks=None,
+                            tooltip={"always_visible": False, "placement": "top"},
+                            updatemode="drag",
+                            className="slider-container",
+                        ),
+                        style={"flex": "1", "minWidth": "260px"},
                     ),
                     html.Div(
                         "STEP 0 of 0",
                         id="step-label",
                         style={
                             "fontFamily": "'JetBrains Mono', monospace",
-                            "fontSize": "10px",
-                            "color": C["text_dim"],
+                            "fontSize": "12px",
+                            "fontWeight": "700",
+                            "color": "#f8fafc",
                             "whiteSpace": "nowrap",
-                            "minWidth": "90px",
+                            "minWidth": "145px",
                             "textAlign": "right",
+                            "background": "#0f172a",
+                            "border": "1px solid #475569",
+                            "borderRadius": "4px",
+                            "padding": "7px 10px",
                         },
                     ),
                     # Speed selector
                     dcc.Dropdown(
                         id="speed-dropdown",
+                        className="dashboard-dropdown",
                         options=[
-                            {"label": "Fast 0.5s", "value": 500},
-                            {"label": "Normal 1s", "value": 1000},
-                            {"label": "Slow 1.5s", "value": 1500},
-                            {"label": "Very Slow 3s", "value": 3000},
+                            {"label": "Fast (0.5s)", "value": 500},
+                            {"label": "Normal (1.0s)", "value": 1000},
+                            {"label": "Slow (1.5s)", "value": 1500},
+                            {"label": "Very Slow (3.0s)", "value": 3000},
                         ],
                         value=1200,
                         clearable=False,
+                        searchable=False,
                         style={
-                            "width": "110px",
-                            "fontSize": "10px",
+                            "width": "200px",
+                            "minWidth": "200px",
+                            "fontSize": "11px",
+                            "fontWeight": "600",
                             "fontFamily": "'JetBrains Mono', monospace",
-                            "backgroundColor": C["surface2"],
-                            "color": C["text"],
-                            "border": f"1px solid {C['border']}",
+                            "backgroundColor": "#f8fafc",
+                            "color": "#0f172a",
+                            "border": "1px solid #94a3b8",
                             "borderRadius": "4px",
+                            "flexShrink": "0",
+                        },
+                    ),
+                    html.Button(
+                        "EXPORT HTML", id="btn-export-html",
+                        title="Export replay as static HTML",
+                        style={**_ctrl_btn_style(C), "fontSize": "10px", "color": C["blue"], "border": f"1px solid {C['blue']}"},
+                    ),
+                    html.Div(
+                        id="export-status",
+                        style={
+                            "fontFamily": "'JetBrains Mono', monospace",
+                            "fontSize": "9px",
+                            "color": C["text_dim"],
+                            "minWidth": "120px",
                         },
                     ),
                 ], style={
@@ -1251,6 +1511,7 @@ def make_layout():
                     html.Div([
                         dcc.Dropdown(
                             id="log-filter-team",
+                            className="dashboard-dropdown",
                             options=[
                                 {"label": "ALL", "value": "ALL"},
                                 {"label": "RED", "value": "RED"},
@@ -1263,9 +1524,9 @@ def make_layout():
                                 "width": "90px",
                                 "fontSize": "10px",
                                 "fontFamily": "'JetBrains Mono', monospace",
-                                "backgroundColor": C["surface2"],
-                                "color": C["text"],
-                                "border": f"1px solid {C['border']}",
+                                "backgroundColor": "#f8fafc",
+                                "color": "#0f172a",
+                                "border": "1px solid #94a3b8",
                                 "borderRadius": "4px",
                             },
                         ),
@@ -1295,12 +1556,13 @@ def make_layout():
 
         ], id="main-grid", style={
             "display": "flex" if not no_traces else "none",
-            "gap": "10px",
-            "padding": "10px",
+            "gap": "12px",
+            "padding": "12px",
             "alignItems": "flex-start",
-            "height": "calc(100vh - 58px)",
+            "height": "auto",
+            "minHeight": "calc(100vh - 120px)",
             "overflowX": "auto",
-            "overflowY": "hidden",
+            "overflowY": "auto",
         }),
 
     ], id="root", style={
@@ -1348,6 +1610,26 @@ def load_episode_data(path):
 
 
 @app.callback(
+    Output("mode-badge", "children"),
+    Output("mode-badge", "style"),
+    Input("episode-data-store", "data"),
+)
+def update_mode_badge(data):
+    mode = infer_runtime_mode(data if isinstance(data, dict) else {})
+    is_live = "LIVE" in mode
+    color = DARK["green"] if is_live else DARK["yellow"]
+    style = {
+        "fontSize": "10px",
+        "fontFamily": "'JetBrains Mono', monospace",
+        "color": color,
+        "border": f"1px solid {color}",
+        "borderRadius": "4px",
+        "padding": "4px 10px",
+    }
+    return f"● {mode}", style
+
+
+@app.callback(
     Output("step-slider", "max"),
     Output("step-slider", "marks"),
     Input("episode-data-store", "data"),
@@ -1357,7 +1639,7 @@ def update_slider_range(data):
         return 1, {}
     log = data.get("episode_log", [])
     steps = [e.get("step", e.get("t", 0)) for e in log]
-    max_step = max(steps) if steps else 1
+    max_step = int(data.get("step", 0) or (max(steps) if steps else 1))
     # Marks every 10 steps
     marks = {i: {"label": str(i), "style": {"fontSize": "8px"}}
              for i in range(0, max_step + 1, max(10, max_step // 10))}
@@ -1393,11 +1675,25 @@ def toggle_autoplay(n_clicks, speed, is_playing):
     Input("btn-prev", "n_clicks"),
     Input("btn-next", "n_clicks"),
     Input("btn-last", "n_clicks"),
+    Input("btn-jump-reset", "n_clicks"),
+    Input("btn-jump-trap", "n_clicks"),
     State("step-slider", "value"),
     State("step-slider", "max"),
+    State("episode-data-store", "data"),
     prevent_initial_call=True,
 )
-def advance_step(n_int, btn_first, btn_prev, btn_next, btn_last, current, max_val):
+def advance_step(
+    n_int,
+    btn_first,
+    btn_prev,
+    btn_next,
+    btn_last,
+    btn_jump_reset,
+    btn_jump_trap,
+    current,
+    max_val,
+    data,
+):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
@@ -1414,6 +1710,22 @@ def advance_step(n_int, btn_first, btn_prev, btn_next, btn_last, current, max_va
         return min(m, v + 1)
     if trigger == "btn-last":
         return m
+    if trigger == "btn-jump-reset":
+        reset_steps = sorted({int(s) for s in extract_context_resets(data or {}) if isinstance(s, int) and s > 0})
+        for s in reset_steps:
+            if s > v:
+                return min(m, s)
+        if reset_steps:
+            return min(m, reset_steps[0])
+        return no_update
+    if trigger == "btn-jump-trap":
+        trap_steps = extract_trap_steps(data or {})
+        for s in trap_steps:
+            if s > v:
+                return min(m, s)
+        if trap_steps:
+            return min(m, trap_steps[0])
+        return no_update
     return no_update
 
 
@@ -1425,6 +1737,32 @@ def advance_step(n_int, btn_first, btn_prev, btn_next, btn_last, current, max_va
 )
 def update_step_label(step, max_step):
     return f"STEP {step or 0:03d} of {max_step or 0:03d}"
+
+
+@app.callback(
+    Output("export-status", "children"),
+    Input("btn-export-html", "n_clicks"),
+    State("episode-dropdown", "value"),
+    State("episode-data-store", "data"),
+    State("step-slider", "value"),
+    State("theme-store", "data"),
+    prevent_initial_call=True,
+)
+def export_current_replay(n_clicks, trace_path, data, step, theme):
+    if not trace_path or not data or "_error" in data:
+        return "No episode to export."
+    try:
+        C = DARK if theme == "dark" else LIGHT
+        net_fig = build_network_figure(data, step or 0, C)
+        tl_fig = build_timeline_figure(data, step or 0, C)
+        out_path = export_replay_html(
+            trace_path=trace_path,
+            network_fig=net_fig,
+            timeline_fig=tl_fig,
+        )
+        return f"Saved: {out_path}"
+    except Exception as e:
+        return f"Export failed: {e}"
 
 
 # ── Main panels update
@@ -1503,6 +1841,7 @@ def update_all_panels(step, data, theme, log_filter):
     }
 
     oversight_text = ", ".join(str(o) for o in summary["oversight"]) if summary["oversight"] else "none"
+    trap_count = len(extract_trap_steps(data))
     stats = [
         html.Div([
             html.Span("Steps:          ", style={"color": C["text_dim"]}),
@@ -1524,6 +1863,14 @@ def update_all_panels(step, data, theme, log_filter):
         html.Div([
             html.Span("Dead Drops:     ", style={"color": C["text_dim"]}),
             html.Span(str(summary["dead_drops"]), style={"color": C["yellow"]}),
+        ]),
+        html.Div([
+            html.Span("Trap Events:    ", style={"color": C["text_dim"]}),
+            html.Span(str(trap_count), style={"color": C["purple"]}),
+        ]),
+        html.Div([
+            html.Span("Complexity:     ", style={"color": C["text_dim"]}),
+            html.Span(f"{summary['complexity']:.2f}x", style={"color": C["green"]}),
         ]),
         html.Br(),
         html.Div([
@@ -1675,12 +2022,13 @@ def toggle_theme(n, current_theme):
     }
     grid_style = {
         "display": "flex",
-        "gap": "10px",
-        "padding": "10px",
+        "gap": "12px",
+        "padding": "12px",
         "alignItems": "flex-start",
-        "height": "calc(100vh - 58px)",
+        "height": "auto",
+        "minHeight": "calc(100vh - 120px)",
         "overflowX": "auto",
-        "overflowY": "hidden",
+        "overflowY": "auto",
     }
     return new_theme, btn_label, root_style, topbar_style, grid_style
 

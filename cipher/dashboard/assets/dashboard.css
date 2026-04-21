@@ -1,0 +1,117 @@
+* { box-sizing: border-box; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a3550; border-radius: 3px; }
+body { margin: 0; padding: 0; transition: background 0.3s; }
+
+.action-log-scroll { overflow-y: auto; max-height: 320px; }
+.action-log-scroll::-webkit-scrollbar-thumb { background: #2a3550; }
+
+.slider-container .rc-slider-track { background: #ff4444 !important; }
+.slider-container .rc-slider-handle { border-color: #ff4444 !important; }
+
+/* Dropdown readability fix (selected value + menu options). */
+.dashboard-dropdown .Select-control,
+#episode-dropdown .Select-control,
+#speed-dropdown .Select-control,
+#log-filter-team .Select-control {
+  background-color: #f8fafc !important;
+  border: 1px solid #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.Select.has-value.Select--single > .Select-control .Select-value .Select-value-label,
+.dashboard-dropdown .Select--single > .Select-control .Select-value .Select-value-label,
+#episode-dropdown .Select--single > .Select-control .Select-value .Select-value-label,
+#speed-dropdown .Select--single > .Select-control .Select-value .Select-value-label,
+#log-filter-team .Select--single > .Select-control .Select-value .Select-value-label,
+.dashboard-dropdown .Select-value-label {
+  color: #0f172a !important;
+  opacity: 1 !important;
+  font-weight: 700 !important;
+}
+
+.dashboard-dropdown .Select-placeholder,
+#episode-dropdown .Select-placeholder,
+#speed-dropdown .Select-placeholder,
+#log-filter-team .Select-placeholder {
+  color: #64748b !important;
+  opacity: 1 !important;
+}
+
+.dashboard-dropdown .Select-input > input,
+#episode-dropdown .Select-input > input,
+#speed-dropdown .Select-input > input,
+#log-filter-team .Select-input > input {
+  color: #0f172a !important;
+}
+
+.dashboard-dropdown .Select-arrow,
+#episode-dropdown .Select-arrow,
+#speed-dropdown .Select-arrow,
+#log-filter-team .Select-arrow {
+  border-top-color: #334155 !important;
+}
+
+.dashboard-dropdown .Select-menu-outer,
+#episode-dropdown .Select-menu-outer,
+#speed-dropdown .Select-menu-outer,
+#log-filter-team .Select-menu-outer {
+  background-color: #f8fafc !important;
+  border: 1px solid #94a3b8 !important;
+}
+
+.dashboard-dropdown .VirtualizedSelectOption,
+#episode-dropdown .VirtualizedSelectOption,
+#speed-dropdown .VirtualizedSelectOption,
+#log-filter-team .VirtualizedSelectOption {
+  color: #0f172a !important;
+  background-color: #f8fafc !important;
+}
+
+.dashboard-dropdown .VirtualizedSelectFocusedOption,
+#episode-dropdown .VirtualizedSelectFocusedOption,
+#speed-dropdown .VirtualizedSelectFocusedOption,
+#log-filter-team .VirtualizedSelectFocusedOption {
+  color: #0f172a !important;
+  background-color: #dbeafe !important;
+}
+
+.dashboard-dropdown .VirtualizedSelectSelectedOption,
+#episode-dropdown .VirtualizedSelectSelectedOption,
+#speed-dropdown .VirtualizedSelectSelectedOption,
+#log-filter-team .VirtualizedSelectSelectedOption {
+  color: #ffffff !important;
+  background-color: #2563eb !important;
+  font-weight: 700 !important;
+}
+
+.dashboard-dropdown .is-focused:not(.is-open) > .Select-control,
+#episode-dropdown .is-focused:not(.is-open) > .Select-control,
+#speed-dropdown .is-focused:not(.is-open) > .Select-control,
+#log-filter-team .is-focused:not(.is-open) > .Select-control {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 1px #2563eb !important;
+}
+
+/* Extra hard fix for bottom-right speed selector readability */
+#speed-dropdown,
+#speed-dropdown * {
+  color: #0f172a !important;
+}
+
+#speed-dropdown .Select-control,
+#speed-dropdown .Select-value,
+#speed-dropdown .Select-value-label,
+#speed-dropdown .Select-placeholder,
+#speed-dropdown .Select-input > input {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+  opacity: 1 !important;
+}
+
+#speed-dropdown .Select-value-label {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.01em !important;
+}
