@@ -43,6 +43,11 @@ from cipher.environment.observation import (
 )
 from cipher.environment.scenario import ScenarioGenerator
 from cipher.environment.state import EpisodeState
+from cipher.environment.traps import (
+    BlueTrapType,
+    RedTrapType,
+    TrapRegistry,
+)
 from cipher.memory.dead_drop import DeadDropVault, build_dead_drop_from_state
 from cipher.rewards.blue_reward import compute_blue_reward
 from cipher.rewards.oversight_reward import compute_oversight_signal
@@ -53,13 +58,41 @@ from cipher.utils.logger import get_logger
 logger = get_logger(__name__)
 console = Console(force_terminal=True)
 
+RED_TRAP_ACTIONS = {
+    ActionType.PLANT_FALSE_TRAIL,
+    ActionType.PLANT_TEMPORAL_DECOY,
+    ActionType.PLANT_HONEYPOT_POISON,
+    ActionType.WRITE_CORRUPTED_DROP,
+}
+BLUE_TRAP_ACTIONS = {
+    ActionType.PLACE_HONEYPOT,
+    ActionType.PLANT_BREADCRUMB,
+    ActionType.TRIGGER_FALSE_ESCALATION,
+    ActionType.TAMPER_DEAD_DROP,
+}
+RED_ACTION_TO_TRAP = {
+    ActionType.PLANT_FALSE_TRAIL: RedTrapType.FALSE_TRAIL,
+    ActionType.PLANT_TEMPORAL_DECOY: RedTrapType.TEMPORAL_DECOY,
+    ActionType.PLANT_HONEYPOT_POISON: RedTrapType.HONEYPOT_POISON,
+    ActionType.WRITE_CORRUPTED_DROP: RedTrapType.DEAD_DROP_CORRUPTION,
+}
+BLUE_ACTION_TO_TRAP = {
+    ActionType.PLACE_HONEYPOT: BlueTrapType.HONEYPOT,
+    ActionType.PLANT_BREADCRUMB: BlueTrapType.BREADCRUMB,
+    ActionType.TRIGGER_FALSE_ESCALATION: BlueTrapType.FALSE_ESCALATION,
+    ActionType.TAMPER_DEAD_DROP: BlueTrapType.DEAD_DROP_TAMPER,
+}
+
 
 def run_episode(
-    episode_number: int = 1,
+    scenario: Any | None = None,
+    graph: Any | None = None,
+    cfg: Any | None = None,
     max_steps: int = 10,
     verbose: bool = True,
     save_trace: bool = False,
-) -> tuple[float, float]:
+    episode_number: int = 1,
+) -> Any:
     """
     Run a single CIPHER episode.
 
@@ -72,17 +105,29 @@ def run_episode(
     Returns:
         Tuple of (red_total_reward, blue_total_reward).
     """
+    cfg = cfg or config
+    if isinstance(scenario, int):
+        episode_number = scenario
+        scenario = None
+    return_payload_mode = scenario is not None and graph is not None
+
     # ── Generate scenario ────────────────────────────────────────
-    scenario_gen = ScenarioGenerator()
-    scenario = scenario_gen.generate(episode_number)
+    if scenario is None:
+        scenario_gen = ScenarioGenerator()
+        scenario = scenario_gen.generate(episode_number)
+    else:
+        episode_number = getattr(scenario, "episode_number", episode_number)
 
     # Use full graph size from config
-    graph_size = config.env_graph_size
-    graph = generate_enterprise_graph(
-        n_nodes=graph_size,
-        honeypot_density=config.env_honeypot_density,
-        seed=scenario.episode_seed,
-    )
+    graph_size = cfg.env_graph_size
+    if graph is None:
+        graph = getattr(scenario, "generated_graph", None)
+        if graph is None:
+            graph = generate_enterprise_graph(
+                n_nodes=graph_size,
+                honeypot_density=cfg.env_honeypot_density,
+                seed=scenario.episode_seed,
+            )
 
     # ── Resolve scenario against actual graph ────────────────────
     entry_points = get_entry_points(graph)
@@ -110,23 +155,28 @@ def run_episode(
 
     # ── Initialize vault ─────────────────────────────────────────
     vault = DeadDropVault(
-        vault_dir=config.drop_vault_dir,
-        max_tokens_per_drop=config.env_dead_drop_max_tokens,
+        vault_dir=cfg.drop_vault_dir,
+        max_tokens_per_drop=cfg.env_dead_drop_max_tokens,
     )
     vault.clear()
 
+    # ── Initialize trap registry (Phase 5) ────────────────────────
+    trap_registry = TrapRegistry(cfg)
+    state.trap_registry = trap_registry
+    state.red_path_history = [scenario.red_start_node]
+
     # ── Initialize agents ────────────────────────────────────────
     red_agents = [
-        RedPlanner("red_planner_01", config),
-        RedAnalyst("red_analyst_01", config),
-        RedOperative("red_operative_01", config),
-        RedExfiltrator("red_exfiltrator_01", config),
+        RedPlanner("red_planner_01", cfg),
+        RedAnalyst("red_analyst_01", cfg),
+        RedOperative("red_operative_01", cfg),
+        RedExfiltrator("red_exfiltrator_01", cfg),
     ]
     blue_agents = [
-        BlueSurveillance("blue_surveillance_01", config),
-        BlueThreatHunter("blue_threat_hunter_01", config),
-        BlueDeceptionArchitect("blue_deception_architect_01", config),
-        BlueForensics("blue_forensics_01", config),
+        BlueSurveillance("blue_surveillance_01", cfg),
+        BlueThreatHunter("blue_threat_hunter_01", cfg),
+        BlueDeceptionArchitect("blue_deception_architect_01", cfg),
+        BlueForensics("blue_forensics_01", cfg),
     ]
 
     # Track metrics
@@ -145,7 +195,7 @@ def run_episode(
         # ── Check context reset ──────────────────────────────────
         context_reset = (
             step > 1
-            and step % config.env_context_reset_interval == 0
+            and step % cfg.env_context_reset_interval == 0
         )
 
         if context_reset:
@@ -172,21 +222,23 @@ def run_episode(
         )
         blue_obs = generate_blue_observation(state)
 
+        red_actions: list[Action] = []
+        blue_actions: list[Action] = []
+        red_planner_action: Action | None = None
+
         # ── RED agents act ───────────────────────────────────────
         for agent in red_agents:
             agent.observe(red_obs)
             action = agent.act()
             action.step = step
+            red_actions.append(action)
+            if isinstance(agent, RedPlanner):
+                red_planner_action = action
 
-            # Process RED action
             result = _process_red_action(action, state, vault, scenario)
-
-            # Track vault efficiency
             if action.action_type == ActionType.WRITE_DEAD_DROP:
                 vault_writes += 1
                 vault_efficiency_total += result.get("memory_efficiency", 1.0)
-
-            # Log action
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
@@ -194,46 +246,94 @@ def run_episode(
                     "target_node": action.target_node,
                     "target_file": action.target_file,
                     "reasoning": action.reasoning,
+                    "trap_params": action.trap_params or {},
                 },
                 result=result,
             )
-
             if verbose:
                 _print_action(step, action, state, "red")
 
         # ── BLUE agents act ──────────────────────────────────────
         for agent in blue_agents:
+            setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
             agent.observe(blue_obs)
             action = agent.act()
             action.step = step
+            blue_actions.append(action)
 
-            # Process BLUE action
             result = _process_blue_action(action, state)
-
-            # Track first detection
-            if (
-                steps_to_first_detection is None
-                and state.blue_detection_confidence > 0.5
-            ):
+            if steps_to_first_detection is None and state.blue_detection_confidence > 0.5:
                 steps_to_first_detection = step
-
-            # Log action
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
                 action_payload={
                     "target_node": action.target_node,
                     "reasoning": action.reasoning,
+                    "trap_params": action.trap_params or {},
                 },
                 result=result,
             )
-
             if verbose:
                 _print_action(step, action, state, "blue")
 
         # ── Check terminal conditions ────────────────────────────
         if state.is_done():
             break
+
+        all_actions_this_step = red_actions + blue_actions
+        for action in all_actions_this_step:
+            if action.action_type in RED_TRAP_ACTIONS:
+                trap_type = RED_ACTION_TO_TRAP[action.action_type]
+                success, reason = state.trap_registry.place_red_trap(
+                    trap_type=trap_type,
+                    placed_by=action.agent_id,
+                    target_node=action.target_node or state.red_current_node,
+                    step=state.step,
+                    params=action.trap_params or {},
+                    state=state,
+                )
+                if success:
+                    state.red_traps_placed_count += 1
+                else:
+                    logger.debug(f"Trap placement rejected: {reason}")
+            elif action.action_type in BLUE_TRAP_ACTIONS:
+                trap_type = BLUE_ACTION_TO_TRAP[action.action_type]
+                success, reason = state.trap_registry.place_blue_trap(
+                    trap_type=trap_type,
+                    placed_by=action.agent_id,
+                    target_node=action.target_node or state.red_current_node,
+                    step=state.step,
+                    params=action.trap_params or {},
+                    state=state,
+                )
+                if success:
+                    state.blue_traps_placed_count += 1
+                else:
+                    logger.debug(f"Trap placement rejected: {reason}")
+
+        trap_events = state.trap_registry.evaluate_step(
+            step=state.step,
+            last_red_action=red_planner_action or (red_actions[0] if red_actions else None),
+            last_blue_actions=blue_actions,
+            state=state,
+            graph=graph,
+            vault=vault,
+        )
+        for event in trap_events:
+            state.record_trap_event(event)
+            logger.info(f"TRAP EVENT: {event.effect_description}")
+            if verbose:
+                _print_trap_event(step, event)
+
+        for action in blue_actions:
+            if action.action_type == ActionType.INVESTIGATE_NODE and action.target_node is not None:
+                discovered = vault.get_drops_at_node(action.target_node)
+                state.blue_discovered_drop_paths.extend(discovered)
+                if discovered:
+                    logger.debug(
+                        f"BLUE discovered {len(discovered)} drop(s) at node {action.target_node}"
+                    )
 
         # Check max steps
         if step >= max_steps:
@@ -256,6 +356,14 @@ def run_episode(
     if save_trace:
         _save_episode_trace(state, episode_number)
 
+    result_payload = {
+        "red_reward": red_reward.total,
+        "blue_reward": blue_reward.total,
+        "state": state,
+        "scenario": scenario,
+    }
+    if return_payload_mode:
+        return result_payload
     return red_reward.total, blue_reward.total
 
 
@@ -359,10 +467,15 @@ def _process_red_action(
         state.is_terminal = True
         state.terminal_reason = "aborted"
 
-    elif action.action_type == ActionType.PLANT_TRAP:
-        # Stub — Phase 5
-        result["stub"] = True
-        result["message"] = "Trap placement not implemented until Phase 5"
+    elif action.action_type in (
+        ActionType.PLANT_FALSE_TRAIL,
+        ActionType.PLANT_TEMPORAL_DECOY,
+        ActionType.PLANT_HONEYPOT_POISON,
+        ActionType.WRITE_CORRUPTED_DROP,
+        ActionType.PLANT_TRAP,
+    ):
+        # Placement is routed centrally in the episode loop.
+        result["trap_action_queued"] = True
 
     return result
 
@@ -422,22 +535,82 @@ def _process_blue_action(
 
     elif action.action_type in (
         ActionType.PLACE_HONEYPOT,
+        ActionType.PLANT_BREADCRUMB,
+        ActionType.TRIGGER_FALSE_ESCALATION,
+        ActionType.TAMPER_DEAD_DROP,
         ActionType.DEPLOY_TRAP,
+        ActionType.DEPLOY_BREADCRUMB,
+        ActionType.DEPLOY_FALSE_ESCALATION,
     ):
-        # Stub — Phase 5
-        result["stub"] = True
+        result["trap_action_queued"] = True
 
     return result
 
 
+def _apply_trap_effect(effect: Any, state: Any, blue_obs: Any) -> None:
+    """
+    Apply a TrapEffect's mutations to the episode state.
+
+    Handles suspicion deltas, detection confidence changes, zone suspicion
+    spikes, and injects fake anomalies into the anomaly log.
+    """
+    mutations = effect.state_mutations
+
+    # Suspicion delta (positive = more suspicious, negative = less)
+    if "suspicion_delta" in mutations:
+        state.update_suspicion(mutations["suspicion_delta"])
+
+    # Detection confidence delta
+    if "detection_confidence_delta" in mutations:
+        state.blue_detection_confidence = min(
+            1.0,
+            max(0.0, state.blue_detection_confidence + mutations["detection_confidence_delta"]),
+        )
+
+    # Zone suspicion spike
+    if "zone_suspicion_spike" in mutations:
+        for zone_id, spike in mutations["zone_suspicion_spike"].items():
+            zone_key = int(zone_id)
+            current = state.zone_suspicion_scores.get(zone_key, 0.0)
+            state.zone_suspicion_scores[zone_key] = min(1.0, current + spike)
+
+    # Inject fake anomalies into the anomaly log
+    for anomaly in effect.injected_anomalies:
+        state.anomaly_log.append(anomaly)
+
+    logger.debug(
+        f"Trap effect applied: {effect.effect_type} "
+        f"(trap={effect.trap_id}, affected={effect.affected_team})"
+    )
+
+
+def _print_trap_event(step: int, effect: Any) -> None:
+    """Print a trap trigger event to the console."""
+    team = effect.triggered_by_team
+    color = "red" if team == "red" else "blue"
+    icon = "⚡"
+
+    console.print(
+        f"  Step {step:03d} | {icon} [{color}]TRAP FIRED[/{color}] "
+        f"[bold]{str(effect.trap_type).upper()}[/bold] | "
+        f"[dim]{effect.effect_description[:60]}[/dim]"
+    )
+
+
 def _print_banner(episode_number: int, graph_size: int, n_agents: int) -> None:
     """Print the episode startup banner."""
+    from cipher.utils.llm_mode import is_live_mode
+    mode_str = "LIVE LLM" if is_live_mode() else "STUB"
+    mode_style = "bold green" if is_live_mode() else "dim"
+
     banner = Text()
     banner.append("CIPHER", style="bold white")
     banner.append(" - Episode ", style="white")
     banner.append(f"{episode_number:03d}", style="bold cyan")
     banner.append(f"\nGraph: {graph_size} nodes", style="dim")
-    banner.append(f" | Agents: {n_agents} active (stub mode)", style="dim")
+    banner.append(f" | Agents: {n_agents} active", style="dim")
+    banner.append(f" | Mode: ", style="dim")
+    banner.append(f"{mode_str}", style=mode_style)
 
     console.print(Panel(banner, border_style="bright_cyan", padding=(1, 2)))
 
@@ -459,7 +632,7 @@ def _print_action(
     state: EpisodeState,
     team: str,
 ) -> None:
-    """Print a single agent action with color coding."""
+    """Print a single agent action with color coding and reasoning."""
     color = "red" if team == "red" else "blue"
     icon = "[R]" if team == "red" else "[B]"
 
@@ -486,6 +659,11 @@ def _print_action(
         f"  Step {step:03d} | {icon} [{color}]{name}[/{color}] "
         f"-> [{color}]{action_str}[/{color}] {target}{susp}"
     )
+
+    # Show reasoning (Phase 3) — truncated for readability
+    if action.reasoning:
+        reasoning_display = action.reasoning[:80]
+        console.print(f"           [dim]  └─ {reasoning_display}[/dim]")
 
 
 def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any) -> None:

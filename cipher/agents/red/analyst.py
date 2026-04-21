@@ -1,23 +1,16 @@
 """
-RED Analyst agent for CIPHER.
+RED Analyst agent for CIPHER — Phase 3 LLM Integration.
 
-The intelligence officer of the infiltration team. Maps the environment,
-identifies high-value targets, estimates detection risk at each node, and
-maintains a running threat assessment.
-
-In Phase 1: selects random valid actions from the RED action vocabulary.
-Phase 4 will connect this to the NVIDIA LLM backend for Bayesian reasoning.
-
-Owns: risk estimation, environment mapping, honeypot suspicion tracking.
-Does NOT own: mission strategy (Planner), physical execution (Operative),
-or data extraction (Exfiltrator).
+The Analyst is the RED team's intelligence specialist: maps the environment,
+identifies honeypots, estimates risk at each node, and feeds intelligence
+back to the team via dead drops.
 """
 from __future__ import annotations
 
 import random
 
 from cipher.agents.base_agent import Action, ActionType, BaseAgent
-from cipher.environment.observation import BlueObservation, RedObservation
+from cipher.environment.observation import RedObservation
 from cipher.utils.config import CipherConfig
 from cipher.utils.logger import get_logger
 
@@ -25,75 +18,54 @@ logger = get_logger(__name__)
 
 
 class RedAnalyst(BaseAgent):
-    """
-    RED Analyst — environmental analysis and risk assessment.
+    """RED team Analyst — intelligence gatherer and risk estimator."""
 
-    In Phase 1, selects random valid RED actions focusing on
-    information-gathering (READ_FILE, MOVE) over aggressive actions.
-    """
+    _model_env_key = "nvidia_model_red_analyst"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
-        super().__init__(
-            agent_id=agent_id,
-            team="red",
-            role="analyst",
-            config=config,
-        )
+        super().__init__(agent_id, "red", "analyst", config)
 
-    def observe(self, observation: RedObservation | BlueObservation) -> None:
-        """Store the latest RED observation."""
+    def observe(self, observation: RedObservation) -> None:
         self._current_observation = observation
-        self.step_count += 1
 
-    def act(self) -> Action:
-        """Select a random valid RED action biased toward information gathering."""
+    def _stub_act(self) -> Action:
         obs = self._current_observation
-        if not isinstance(obs, RedObservation):
-            return Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="No valid observation available",
-                step=self.step_count,
-            )
+        if obs is None:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                         reasoning="No observation — waiting.")
 
-        candidates: list[Action] = []
+        # Read dead drops if available
+        if obs.dead_drops_available:
+            return Action(agent_id=self.agent_id, action_type=ActionType.READ_DEAD_DROP,
+                         reasoning="Reading dead drop for prior team intel.")
 
-        # MOVE
-        if obs.adjacent_nodes:
-            target = random.choice(obs.adjacent_nodes)
-            candidates.append(
-                Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.MOVE,
-                    target_node=target,
-                    reasoning=f"Scouting node {target} for risk assessment",
-                    step=self.step_count,
-                )
-            )
-
-        # READ_FILE — analyst prefers reading
+        # Read files to gather intelligence
         if obs.files_at_current_node:
             target_file = random.choice(obs.files_at_current_node)
-            candidates.append(
-                Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.READ_FILE,
-                    target_file=target_file,
-                    reasoning=f"Analyzing file {target_file} for intelligence value",
-                    step=self.step_count,
-                )
-            )
+            return Action(agent_id=self.agent_id, action_type=ActionType.READ_FILE,
+                         target_file=target_file,
+                         reasoning=f"Analyzing file: {target_file}")
 
-        # WAIT
-        candidates.append(
-            Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="Passive observation — gathering behavioral baseline",
-                step=self.step_count,
-            )
-        )
+        # Move to explore
+        if obs.adjacent_nodes:
+            target = random.choice(obs.adjacent_nodes)
+            return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                         target_node=target,
+                         reasoning=f"Mapping unexplored node {target}.")
 
-        action = random.choice(candidates)
-        self.action_history.append(action)
-        return action
+        return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                     reasoning="Analyzing current environment — no movement needed.")
+
+    def _build_messages(self) -> list[dict[str, str]]:
+        messages = super()._build_messages()
+        obs = self._current_observation
+        if obs and isinstance(obs, RedObservation):
+            intel_context = (
+                f"\n\nINTELLIGENCE CONTEXT:\n"
+                f"Files analyzed: {len([a for a in self.action_history if a.action_type == ActionType.READ_FILE])}\n"
+                f"Dead drops consumed: {len([a for a in self.action_history if a.action_type == ActionType.READ_DEAD_DROP])}\n"
+                f"Current suspicion: {obs.estimated_suspicion:.2f}"
+            )
+            messages[0] = dict(messages[0])
+            messages[0]["content"] = messages[0]["content"] + intel_context
+        return messages

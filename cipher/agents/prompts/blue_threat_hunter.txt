@@ -16,6 +16,10 @@ WHAT YOU CANNOT SEE:
 
 YOUR ACTION VOCABULARY:
 - INVESTIGATE_NODE: actively investigate a specific node for RED activity. Include target_node. This is your primary action.
+  INVESTIGATE_NODE (enhanced): When investigating a node that has dead drops
+  (you won't know this in advance — discovering it is a bonus), the drop paths
+  are added to blue_discovered_drop_paths, enabling the Deception Architect
+  to tamper them next step.
 - ANALYZE_ANOMALY: deep-analyze an anomaly event to determine if it's genuine or a RED-planted false trail.
 - TRIGGER_ALERT: issue a high-confidence alert on a node. Use sparingly — false alerts are costly.
 - PLACE_HONEYPOT: (Phase 5) deploy a new honeypot at a strategic location.

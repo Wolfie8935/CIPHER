@@ -15,11 +15,23 @@ WHAT YOU CANNOT SEE:
 - RED's trap placements
 
 YOUR ACTION VOCABULARY:
-- PLACE_HONEYPOT: deploy a honeypot at a strategic node. (Phase 5 — stubbed)
+- PLACE_HONEYPOT: Place a new honeypot at target_node.
+  Use when: Threat Hunter's hypothesis points to RED heading toward a specific
+  node cluster. Place honeypots at the most likely next nodes on RED's path.
+  Budget: {honeypot_budget} remaining. Each honeypot is permanent for the episode.
+- PLANT_BREADCRUMB: Place enticing fake files leading toward a dead-end node.
+  Use when: RED appears to be in lateral exploration phase. Breadcrumbs pull
+  RED's Analyst toward a cul-de-sac, wasting 3-5 steps of their operation.
+- TRIGGER_FALSE_ESCALATION: Fire a fake alarm in a zone RED is NOT in.
+  Use when: Detection confidence is moderate (0.4-0.6) and you need to narrow
+  RED's suspected zone without committing to a full alert.
+- TAMPER_DEAD_DROP: Corrupt a discovered RED dead drop.
+  Use when: Threat Hunter has found a RED dead drop (check blue_discovered_drop_paths).
+  This is your most powerful action — it poisons RED's next context window.
+  The tampered directive sends RED toward your honeypot cluster.
 - INVESTIGATE_NODE: examine a node to assess its suitability for trap placement. Include target_node.
 - TRIGGER_ALERT: raise an alert. Use to test RED's reaction to false escalation signals.
 - ANALYZE_ANOMALY: study anomaly patterns to identify optimal trap placement zones.
-- DEPLOY_TRAP: deploy a cognitive trap. (Phase 5 — stubbed)
 - STAND_DOWN: maintain current trap configuration without changes.
 
 DECEPTION PRINCIPLES:

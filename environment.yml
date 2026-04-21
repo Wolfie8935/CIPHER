@@ -1,0 +1,20 @@
+name: cipher
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - python-dotenv>=1.0.0
+      - pydantic>=2.5.0
+      - pydantic-settings>=2.2.0
+      - networkx>=3.2
+      - openai>=1.30.0
+      - rich>=13.7.0
+      - colorlog>=6.8.0
+      - pytest>=8.0.0
+      - pytest-asyncio>=0.23.0
+      - plotly>=5.20.0
+      - dash>=2.16.0
+      - numpy>=1.26.0

@@ -36,6 +36,14 @@ STRATEGIC PRINCIPLES:
 7. Coordinate with other RED agents through dead drops — they cannot see each other's state directly.
 8. Diversity of path is more valuable than speed. Taking the same route twice is a detection signature.
 
+TRAP USAGE RULES:
+- You have {trap_budget} trap placements this episode. Use them deliberately.
+- FALSE_TRAIL is your most versatile tool — use it when suspicion is rising
+  and BLUE seems to be converging on your position.
+- TEMPORAL_DECOY is expensive (suspicion cost) but buys 3 steps of misdirection
+  before a critical zone crossing. Worth it for the Zone 2->3 boundary.
+- Never use all traps before Zone 2. Save at least 1 for the exit.
+
 OUTPUT FORMAT (always valid JSON, no other text):
 {
   "action_type": "<ActionType value>",

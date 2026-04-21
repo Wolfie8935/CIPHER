@@ -1,23 +1,15 @@
 """
-RED Exfiltrator agent for CIPHER.
+RED Exfiltrator agent for CIPHER — Phase 3 LLM Integration.
 
-The extraction specialist. Packages target data, executes the final exfiltration
-at the high-value target, and manages the exit sequence without triggering alarms.
-
-In Phase 1: selects random valid actions. EXFILTRATE is chosen when at HVT node.
-Phase 4 will connect this to the NVIDIA LLM backend.
-
-Owns: data exfiltration, exit sequencing, terminal-phase decisions.
-Does NOT own: mission strategy (Planner), risk analysis (Analyst),
-or traversal execution (Operative).
+The Exfiltrator is the RED team's extraction specialist: packages target files,
+sequences the exit plan, and manages the critical final phase.
 """
 from __future__ import annotations
 
 import random
 
 from cipher.agents.base_agent import Action, ActionType, BaseAgent
-from cipher.environment.graph import NodeType
-from cipher.environment.observation import BlueObservation, RedObservation
+from cipher.environment.observation import RedObservation
 from cipher.utils.config import CipherConfig
 from cipher.utils.logger import get_logger
 
@@ -25,83 +17,68 @@ logger = get_logger(__name__)
 
 
 class RedExfiltrator(BaseAgent):
-    """
-    RED Exfiltrator — terminal-phase data extraction specialist.
+    """RED team Exfiltrator — data extraction and exit specialist."""
 
-    In Phase 1, selects random valid RED actions. If at a HIGH_VALUE_TARGET
-    node with files, attempts EXFILTRATE.
-    """
+    _model_env_key = "nvidia_model_red_exfil"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
-        super().__init__(
-            agent_id=agent_id,
-            team="red",
-            role="exfiltrator",
-            config=config,
-        )
+        super().__init__(agent_id, "red", "exfiltrator", config)
 
-    def observe(self, observation: RedObservation | BlueObservation) -> None:
-        """Store the latest RED observation."""
+    def observe(self, observation: RedObservation) -> None:
         self._current_observation = observation
-        self.step_count += 1
 
-    def act(self) -> Action:
-        """
-        Select action. Attempts EXFILTRATE when at HIGH_VALUE_TARGET.
-
-        Returns:
-            An Action for this step.
-        """
+    def _stub_act(self) -> Action:
         obs = self._current_observation
-        if not isinstance(obs, RedObservation):
-            return Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="No valid observation available",
-                step=self.step_count,
-            )
+        if obs is None:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                         reasoning="No observation — waiting.")
 
-        # If at HVT node with files, attempt exfiltration
-        if (
-            obs.current_node_type == NodeType.HIGH_VALUE_TARGET
-            and obs.files_at_current_node
-        ):
-            target_file = random.choice(obs.files_at_current_node)
-            action = Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.EXFILTRATE,
-                target_file=target_file,
-                reasoning=f"Exfiltrating {target_file} from HVT",
-                step=self.step_count,
-            )
-            self.action_history.append(action)
-            return action
+        # Priority 1: Exfiltrate if at HVT with target files
+        node_type_val = obs.current_node_type.value if hasattr(obs.current_node_type, 'value') else str(obs.current_node_type)
+        if node_type_val == "high_value_target" and obs.files_at_current_node:
+            target_file = obs.files_at_current_node[0]
+            return Action(agent_id=self.agent_id, action_type=ActionType.EXFILTRATE,
+                         target_file=target_file,
+                         reasoning=f"Exfiltrating target file: {target_file}")
 
-        candidates: list[Action] = []
-
-        # MOVE
+        # Priority 2: Move toward HVT (deeper zones via boundary)
         if obs.adjacent_nodes:
+            if obs.zone_boundary_ahead:
+                target = random.choice(obs.adjacent_nodes)
+                return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                             target_node=target,
+                             reasoning=f"Moving toward HVT — crossing zone boundary.")
+
             target = random.choice(obs.adjacent_nodes)
-            candidates.append(
-                Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.MOVE,
-                    target_node=target,
-                    reasoning=f"Moving toward extraction point via node {target}",
-                    step=self.step_count,
-                )
-            )
+            return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                         target_node=target,
+                         reasoning=f"Lateral search for HVT in zone {obs.current_zone}.")
 
-        # WAIT
-        candidates.append(
-            Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="Awaiting extraction window",
-                step=self.step_count,
-            )
-        )
+        # Read dead drops for extraction intel
+        if obs.dead_drops_available:
+            return Action(agent_id=self.agent_id, action_type=ActionType.READ_DEAD_DROP,
+                         reasoning="Reading dead drop for extraction coordinates.")
 
-        action = random.choice(candidates)
-        self.action_history.append(action)
-        return action
+        # Write dead drop with current status
+        if self.step_count % 10 == 0 and self.step_count > 0:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WRITE_DEAD_DROP,
+                         reasoning="Leaving extraction status update in dead drop.")
+
+        return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                     reasoning="Awaiting extraction opportunity.")
+
+    def _build_messages(self) -> list[dict[str, str]]:
+        messages = super()._build_messages()
+        obs = self._current_observation
+        if obs and isinstance(obs, RedObservation):
+            node_type_val = obs.current_node_type.value if hasattr(obs.current_node_type, 'value') else str(obs.current_node_type)
+            exfil_context = (
+                f"\n\nEXFILTRATION STATUS:\n"
+                f"At HVT: {'YES' if node_type_val == 'high_value_target' else 'NO'}\n"
+                f"Files at current node: {len(obs.files_at_current_node)}\n"
+                f"Suspicion: {obs.estimated_suspicion:.2f}\n"
+                f"Priority: REACH HVT → EXFILTRATE ALL TARGET FILES → EXIT"
+            )
+            messages[0] = dict(messages[0])
+            messages[0]["content"] = messages[0]["content"] + exfil_context
+        return messages

@@ -23,7 +23,9 @@ from __future__ import annotations
 import random
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
+from cipher.environment.graph import generate_enterprise_graph
 from cipher.utils.config import config
 from cipher.utils.logger import get_logger
 
@@ -70,6 +72,12 @@ class Scenario:
             3: "cred_zone_3_admin",
         }
     )
+    generated_graph: Any | None = None
+
+    def __iter__(self):
+        """Allow `scenario, graph = generator.generate(...)` unpacking."""
+        yield self
+        yield self.generated_graph
 
 
 class ScenarioGenerator:
@@ -169,6 +177,11 @@ class ScenarioGenerator:
             context_reset_interval=context_interval,
             red_entry_zone=0,
             credential_requirements=credential_reqs,
+            generated_graph=generate_enterprise_graph(
+                n_nodes=config.env_graph_size,
+                honeypot_density=config.env_honeypot_density,
+                seed=episode_seed,
+            ),
         )
 
         logger.debug(

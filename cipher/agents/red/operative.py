@@ -1,23 +1,15 @@
 """
-RED Operative agent for CIPHER.
+RED Operative agent for CIPHER — Phase 3 LLM Integration.
 
-The hands of the infiltration team. Executes in-environment actions: movement,
-file access, trap placement, and maintaining stealth through careful action
-sequencing.
-
-In Phase 1: selects random valid actions with stealth awareness (suspicion check).
-Phase 4 will connect this to the NVIDIA LLM backend.
-
-Owns: stealth execution, traversal, file reads, trap placement.
-Does NOT own: mission strategy (Planner), risk analysis (Analyst),
-or data extraction (Exfiltrator).
+The Operative is the RED team's field executor: handles stealth movement,
+protocol selection, trap avoidance, and real-time suspicion management.
 """
 from __future__ import annotations
 
 import random
 
 from cipher.agents.base_agent import Action, ActionType, BaseAgent
-from cipher.environment.observation import BlueObservation, RedObservation
+from cipher.environment.observation import RedObservation
 from cipher.utils.config import CipherConfig
 from cipher.utils.logger import get_logger
 
@@ -25,90 +17,66 @@ logger = get_logger(__name__)
 
 
 class RedOperative(BaseAgent):
-    """
-    RED Operative — stealth execution specialist.
+    """RED team Operative — stealth executor and field agent."""
 
-    In Phase 1, selects random valid RED actions with basic suspicion awareness:
-    if suspicion > 0.65, defaults to WAIT.
-    """
+    _model_env_key = "nvidia_model_red_operative"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
-        super().__init__(
-            agent_id=agent_id,
-            team="red",
-            role="operative",
-            config=config,
-        )
+        super().__init__(agent_id, "red", "operative", config)
 
-    def observe(self, observation: RedObservation | BlueObservation) -> None:
-        """Store the latest RED observation."""
+    def observe(self, observation: RedObservation) -> None:
         self._current_observation = observation
-        self.step_count += 1
 
-    def act(self) -> Action:
-        """
-        Select a random valid action with basic stealth awareness.
-
-        If estimated suspicion > 0.65, always WAIT or WRITE_DEAD_DROP.
-        """
+    def _stub_act(self) -> Action:
         obs = self._current_observation
-        if not isinstance(obs, RedObservation):
+        if obs is None:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                         reasoning="No observation — maintaining position.")
+
+        # Wait if suspicion is elevated (stealth-first)
+        if obs.estimated_suspicion > 0.6:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                         reasoning=f"Suspicion at {obs.estimated_suspicion:.2f} — going dark.")
+
+        # Periodically seed deception so Phase 5 trap layer is exercised in stub runs.
+        if self.step_count % 4 == 0:
             return Action(
                 agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="No valid observation available",
-                step=self.step_count,
+                action_type=ActionType.PLANT_FALSE_TRAIL,
+                target_node=obs.current_node,
+                trap_params={"n_fake_events": 3},
+                reasoning="Planting a false trail to pull BLUE away from true route.",
             )
 
-        # Stealth check — high suspicion triggers defensive mode
-        if obs.estimated_suspicion > 0.65:
-            action = Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning=f"Suspicion high ({obs.estimated_suspicion:.2f}) — covert hold",
-                step=self.step_count,
-            )
-            self.action_history.append(action)
-            return action
-
-        candidates: list[Action] = []
-
-        # MOVE
+        # Move to adjacent node (stealth priority - avoid honeypots but we can't tell)
         if obs.adjacent_nodes:
             target = random.choice(obs.adjacent_nodes)
-            candidates.append(
-                Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.MOVE,
-                    target_node=target,
-                    reasoning=f"Advancing to node {target}",
-                    step=self.step_count,
-                )
-            )
+            hostname = obs.adjacent_hostnames[obs.adjacent_nodes.index(target)] if target in obs.adjacent_nodes and obs.adjacent_hostnames else f"node-{target}"
+            return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                         target_node=target,
+                         reasoning=f"Stealth move to {hostname}.")
 
-        # READ_FILE
+        # Read files opportunistically
         if obs.files_at_current_node:
             target_file = random.choice(obs.files_at_current_node)
-            candidates.append(
-                Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.READ_FILE,
-                    target_file=target_file,
-                    reasoning=f"Accessing file {target_file}",
-                    step=self.step_count,
-                )
-            )
+            return Action(agent_id=self.agent_id, action_type=ActionType.READ_FILE,
+                         target_file=target_file,
+                         reasoning=f"Opportunistic file read: {target_file}")
 
-        # WAIT
-        candidates.append(
-            Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.WAIT,
-                reasoning="Maintaining covert posture",
-                step=self.step_count,
-            )
-        )
+        return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
+                     reasoning="No safe movement — holding position.")
 
-        action = random.choice(candidates)
-        self.action_history.append(action)
-        return action
+    def _build_messages(self) -> list[dict[str, str]]:
+        messages = super()._build_messages()
+        obs = self._current_observation
+        if obs and isinstance(obs, RedObservation):
+            stealth_context = (
+                f"\n\nSTEALTH STATUS:\n"
+                f"Current suspicion: {obs.estimated_suspicion:.2f}\n"
+                f"Suspicion threshold (abort): 0.85\n"
+                f"Suspicion threshold (caution): 0.60\n"
+                f"Priority: MINIMIZE suspicion delta on every action"
+            )
+            messages[0] = dict(messages[0])
+            messages[0]["content"] = messages[0]["content"] + stealth_context
+        return messages

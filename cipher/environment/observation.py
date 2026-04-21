@@ -298,6 +298,23 @@ def generate_blue_observation(
     # Generate anomalies if not provided
     if recent_anomalies is None:
         recent_anomalies = _generate_step_anomalies(state)
+    trap_anomalies = []
+    for raw in state.blue_anomaly_history:
+        if raw.get("step") != state.step:
+            continue
+        trap_anomalies.append(
+            AnomalyEvent(
+                event_type=raw.get("event_type", "unusual_traversal"),
+                node_id=raw.get("node_id"),
+                severity=float(raw.get("severity", 0.5)),
+                is_red_planted=bool(raw.get("is_red_planted", False)),
+                step=int(raw.get("step", state.step)),
+                zone=raw.get("zone"),
+                description=raw.get("description", ""),
+            )
+        )
+    if trap_anomalies:
+        recent_anomalies = list(recent_anomalies) + trap_anomalies
 
     # Active honeypots
     active_honeypots = get_honeypot_nodes(state.graph)

@@ -41,6 +41,10 @@ class CipherConfig(BaseSettings):
         "nvidia",
         description="LLM provider: nvidia | huggingface | openai",
     )
+    llm_mode: str = Field(
+        "stub",
+        description="LLM mode: stub (random actions, no API cost) | live (real API calls)",
+    )
     nvidia_api_key: str = Field(
         "nvapi-placeholder-key-for-phase1",
         description="NVIDIA NIM API key",
@@ -52,41 +56,41 @@ class CipherConfig(BaseSettings):
 
     # ── Model assignments — RED ──────────────────────────────────
     nvidia_model_red_planner: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for RED Planner agent",
     )
     nvidia_model_red_analyst: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for RED Analyst agent",
     )
     nvidia_model_red_operative: str = Field(
-        "nvidia/mistral-nemo-12b-instruct",
+        "meta/llama-3.1-8b-instruct",
         description="Model for RED Operative agent",
     )
     nvidia_model_red_exfil: str = Field(
-        "nvidia/mistral-nemo-12b-instruct",
+        "meta/llama-3.1-8b-instruct",
         description="Model for RED Exfiltrator agent",
     )
 
     # ── Model assignments — BLUE ─────────────────────────────────
     nvidia_model_blue_surv: str = Field(
-        "nvidia/mistral-nemo-12b-instruct",
+        "meta/llama-3.1-8b-instruct",
         description="Model for BLUE Surveillance agent",
     )
     nvidia_model_blue_hunter: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for BLUE Threat Hunter agent",
     )
     nvidia_model_blue_deceiver: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for BLUE Deception Architect agent",
     )
     nvidia_model_blue_forensics: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for BLUE Forensics agent",
     )
     nvidia_model_oversight: str = Field(
-        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "meta/llama-3.1-70b-instruct",
         description="Model for Oversight Auditor agent",
     )
 

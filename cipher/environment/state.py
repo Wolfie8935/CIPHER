@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import networkx as nx
 from networkx.readwrite import json_graph
@@ -23,6 +23,9 @@ from networkx.readwrite import json_graph
 from cipher.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from cipher.environment.traps import TrapEvent, TrapRegistry
 
 
 @dataclass
@@ -44,6 +47,7 @@ class EpisodeState:
     # ── RED state ────────────────────────────────────────────────
     red_current_node: int = 0
     red_visited_nodes: list[int] = field(default_factory=list)
+    red_path_history: list[int] = field(default_factory=list)
     red_exfiltrated_files: list[str] = field(default_factory=list)
     red_suspicion_score: float = 0.0
     red_traps_placed: list[dict[str, Any]] = field(default_factory=list)
@@ -65,6 +69,8 @@ class EpisodeState:
     blue_investigated_nodes: list[int] = field(default_factory=list)
     blue_alerts_issued: list[dict[str, Any]] = field(default_factory=list)
     blue_false_positives: int = 0
+    blue_anomaly_history: list[dict[str, Any]] = field(default_factory=list)
+    blue_suspected_zone: int | None = None
 
     # ── Shared ───────────────────────────────────────────────────
     dead_drops_on_disk: list[str] = field(default_factory=list)
@@ -79,6 +85,15 @@ class EpisodeState:
     zone_suspicion_scores: dict[int, float] = field(
         default_factory=lambda: {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}
     )
+
+    # ── Phase 5: trap layer ──────────────────────────────────────
+    trap_registry: TrapRegistry | None = None
+    red_traps_placed_count: int = 0
+    blue_traps_placed_count: int = 0
+    trap_events_log: list[dict[str, Any]] = field(default_factory=list)
+    blue_discovered_drop_paths: list[str] = field(default_factory=list)
+    traps_triggered_log: list[dict[str, Any]] = field(default_factory=list)
+    last_honeypot_trigger_step: int | None = None
 
     # ── Action logging ───────────────────────────────────────────
 
@@ -126,6 +141,19 @@ class EpisodeState:
                 f"Suspicion updated: {previous:.3f} -> {self.red_suspicion_score:.3f} "
                 f"(delta={delta:+.3f})"
             )
+
+    def record_trap_event(self, event: TrapEvent) -> None:
+        """Appends trap event to trap_events_log and episode_log."""
+        payload = asdict(event)
+        self.trap_events_log.append(payload)
+        # Keep backward-compat with older traces/tests.
+        self.traps_triggered_log.append(payload)
+        self.log_action(
+            agent_id="trap_engine",
+            action_type=f"TRAP_{event.trap_type.upper()}",
+            action_payload={"trap_id": event.trap_id, "step": event.step},
+            result=event.effect_description,
+        )
 
     def update_suspicion_from_action(self, action_type: str, target_node: int, graph: Any) -> float:
         """Update suspicion dynamically based on action and graph properties."""
@@ -191,6 +219,7 @@ class EpisodeState:
 
         # Update current node and visited list
         self.red_current_node = to_node
+        self.red_path_history.append(to_node)
         if to_node not in self.red_visited_nodes:
             self.red_visited_nodes.append(to_node)
 
@@ -344,6 +373,8 @@ class EpisodeState:
             "blue_investigated_nodes": self.blue_investigated_nodes,
             "blue_alerts_issued": self.blue_alerts_issued,
             "blue_false_positives": self.blue_false_positives,
+            "blue_anomaly_history": self.blue_anomaly_history,
+            "blue_suspected_zone": self.blue_suspected_zone,
             # Shared
             "dead_drops_on_disk": self.dead_drops_on_disk,
             "episode_log": self.episode_log,
@@ -351,6 +382,15 @@ class EpisodeState:
             "terminal_reason": self.terminal_reason,
             "anomaly_log": self.anomaly_log,
             "zone_suspicion_scores": zone_susp,
+            # Phase 5
+            "red_traps_placed_count": self.red_traps_placed_count,
+            "blue_traps_placed_count": self.blue_traps_placed_count,
+            "trap_events_log": self.trap_events_log,
+            "blue_discovered_drop_paths": self.blue_discovered_drop_paths,
+            "traps_triggered_log": self.traps_triggered_log,
+            "red_path_history": self.red_path_history,
+            "last_honeypot_trigger_step": self.last_honeypot_trigger_step,
+            "trap_registry": self.trap_registry.to_dict() if self.trap_registry and hasattr(self.trap_registry, 'to_dict') else None,
         }
 
     @classmethod
@@ -379,6 +419,7 @@ class EpisodeState:
             # RED state
             red_current_node=data.get("red_current_node", 0),
             red_visited_nodes=data.get("red_visited_nodes", []),
+            red_path_history=data.get("red_path_history", []),
             red_exfiltrated_files=data.get("red_exfiltrated_files", []),
             red_suspicion_score=data.get("red_suspicion_score", 0.0),
             red_traps_placed=data.get("red_traps_placed", []),
@@ -397,6 +438,8 @@ class EpisodeState:
             blue_investigated_nodes=data.get("blue_investigated_nodes", []),
             blue_alerts_issued=data.get("blue_alerts_issued", []),
             blue_false_positives=data.get("blue_false_positives", 0),
+            blue_anomaly_history=data.get("blue_anomaly_history", []),
+            blue_suspected_zone=data.get("blue_suspected_zone"),
             # Shared
             dead_drops_on_disk=data.get("dead_drops_on_disk", []),
             episode_log=data.get("episode_log", []),
@@ -404,4 +447,11 @@ class EpisodeState:
             terminal_reason=data.get("terminal_reason"),
             anomaly_log=data.get("anomaly_log", []),
             zone_suspicion_scores=zone_susp,
+            # Phase 5
+            red_traps_placed_count=data.get("red_traps_placed_count", 0),
+            blue_traps_placed_count=data.get("blue_traps_placed_count", 0),
+            trap_events_log=data.get("trap_events_log", []),
+            blue_discovered_drop_paths=data.get("blue_discovered_drop_paths", []),
+            traps_triggered_log=data.get("traps_triggered_log", []),
+            last_honeypot_trigger_step=data.get("last_honeypot_trigger_step"),
         )

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
 CIPHER — Adversarial Multi-Agent Reinforcement Learning Environment
-Phase 1: Project Skeleton — Full Episode Demo
+Phase 3: LLM Integration — Give the Agents Real Brains
 
-Run this file to verify the Phase 1 skeleton is intact:
-  python main.py
+Run this file to verify the system:
+  python main.py                  # Single demo episode (stub mode)
+  python main.py --episodes 3    # Run 3 episodes
+  python main.py --trace          # Save episode trace JSON
+  python main.py --live           # Enable LLM mode (requires valid API key)
 
 Pass condition:
 - No import errors
@@ -12,12 +15,14 @@ Pass condition:
 - Prints a 10-step episode trace with 8 agents
 - At least one dead drop is written
 - RED and BLUE reward components are printed
+- In live mode: agent reasoning is displayed
 - Oversight signal reports (may fire or not)
 
 Usage:
   python main.py                  # Single demo episode
   python main.py --episodes 3    # Run 3 episodes
   python main.py --trace          # Save episode trace JSON
+  python main.py --live           # Enable live LLM mode
 """
 from __future__ import annotations
 
@@ -40,8 +45,8 @@ from rich.text import Text
 
 
 def main() -> None:
-    """Run the CIPHER Phase 1 demo."""
-    parser = argparse.ArgumentParser(description="CIPHER Phase 1 Demo")
+    """Run the CIPHER demo."""
+    parser = argparse.ArgumentParser(description="CIPHER Phase 3 Demo")
     parser.add_argument(
         "--episodes", type=int, default=1, help="Number of episodes to run"
     )
@@ -51,23 +56,35 @@ def main() -> None:
     parser.add_argument(
         "--trace", action="store_true", help="Save episode trace to disk"
     )
+    parser.add_argument(
+        "--live", action="store_true",
+        help="Enable live LLM mode (requires valid NVIDIA API key)"
+    )
     args = parser.parse_args()
 
+    # Set LLM_MODE before importing anything that reads it
+    if args.live:
+        os.environ["LLM_MODE"] = "live"
+
     console = Console(force_terminal=True)
+
+    # ── Detect LLM mode ──────────────────────────────────────────
+    from cipher.utils.llm_mode import is_live_mode
+    llm_mode = "LIVE (LLM)" if is_live_mode() else "STUB (random)"
 
     # ── Startup banner ───────────────────────────────────────────
     banner_text = (
         "========================================================\n"
         "  C I P H E R\n"
         "  Adversarial Multi-Agent RL Environment\n"
-        "  Phase 1 -- Skeleton Verification\n"
+        f"  Phase 3 -- LLM Integration ({llm_mode})\n"
         "========================================================"
     )
     console.print(Panel(banner_text, border_style="bright_cyan", padding=(1, 2)))
     console.print()
 
     # ── Verify imports ───────────────────────────────────────────
-    console.print("[bold white]Phase 1 Import Verification[/bold white]")
+    console.print("[bold white]Phase 3 Import Verification[/bold white]")
     _verify_imports(console)
     console.print()
 
@@ -94,9 +111,9 @@ def main() -> None:
     # ── Final summary ────────────────────────────────────────────
     console.print(
         Panel(
-            "[bold green]✓ Phase 1 pass condition met.[/bold green]\n"
-            "[dim]All modules imported. Episode executed. "
-            "Rewards computed. No crashes.[/dim]",
+            f"[bold green]✓ Phase 3 pass condition met.[/bold green]\n"
+            f"[dim]All modules imported. Episode executed ({llm_mode}). "
+            f"Rewards computed. No crashes.[/dim]",
             border_style="green",
             padding=(1, 2),
         )
@@ -104,11 +121,12 @@ def main() -> None:
 
 
 def _verify_imports(console: Console) -> None:
-    """Verify all Phase 1 modules can be imported without errors."""
+    """Verify all Phase 1-3 modules can be imported without errors."""
     modules = [
         ("cipher.utils.config", "CipherConfig"),
         ("cipher.utils.logger", "get_logger"),
         ("cipher.utils.llm_client", "LLMClient"),
+        ("cipher.utils.llm_mode", "is_live_mode"),
         ("cipher.environment.graph", "generate_enterprise_graph"),
         ("cipher.environment.state", "EpisodeState"),
         ("cipher.environment.observation", "generate_red_observation"),

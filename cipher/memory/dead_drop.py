@@ -267,6 +267,14 @@ class DeadDropVault:
             if (self.vault_dir / filename).exists()
         ]
 
+    def get_drops_at_node(self, node_id: int) -> list[str]:
+        """Returns file paths of all drops at a given node. Uses vault_index."""
+        return [
+            str(self.vault_dir / filename)
+            for filename, mapped_node in self._index.items()
+            if mapped_node == node_id and (self.vault_dir / filename).exists()
+        ]
+
     def clear(self) -> None:
         """
         Clear all drops from the vault. Called at episode start.
