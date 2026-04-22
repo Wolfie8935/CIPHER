@@ -204,6 +204,24 @@ def _build_tab5_layout() -> html.Div:
     )
 
 
+def _build_tab6_layout() -> html.Div:
+    return html.Div(
+        [
+            html.Div(
+                "Reward Curves + Evolution Events",
+                style={"color": TEXT_MUTED, "fontSize": "11px", "marginBottom": "6px"},
+            ),
+            dcc.Graph(id="t6-reward-chart", style={"height": "280px"}),
+            html.Div(
+                "Win Rate Curves (10-episode rolling)",
+                style={"color": TEXT_MUTED, "fontSize": "11px", "margin": "12px 0 6px"},
+            ),
+            dcc.Graph(id="t6-winrate-chart", style={"height": "200px"}),
+            html.Div(id="t6-stats", style={"marginTop": "12px"}),
+        ]
+    )
+
+
 def _load_rewards_csv() -> Optional[pd.DataFrame]:
     try:
         csv_path = Path("rewards_log.csv")
@@ -245,6 +263,26 @@ def _load_training_events() -> list[dict]:
         if not events_path.exists():
             return []
         text = events_path.read_text(encoding="utf-8").strip()
+        if not text:
+            return []
+        rows: list[dict] = []
+        for line in text.split("\n"):
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+        return rows
+    except Exception:
+        return []
+
+
+def _load_evolution_log() -> list[dict]:
+    try:
+        path = Path("prompt_evolution_log.jsonl")
+        if not path.exists():
+            return []
+        text = path.read_text(encoding="utf-8").strip()
         if not text:
             return []
         rows: list[dict] = []
@@ -389,6 +427,7 @@ def create_live_layout() -> html.Div:
                     dcc.Tab(label="Deception Map", value="tab-deception"),
                     dcc.Tab(label="Oversight Feed", value="tab-oversight"),
                     dcc.Tab(label="Difficulty Curve", value="tab-difficulty"),
+                    dcc.Tab(label="Learning Curve", value="tab-evolution"),
                 ],
                 style={"fontFamily": "monospace", "fontSize": "12px"},
                 colors={"border": BORDER_COLOR, "primary": RED_COLOR, "background": PANEL_BG},
@@ -423,6 +462,8 @@ def render_tab(tab):
         return _build_tab4_layout()
     if tab == "tab-difficulty":
         return _build_tab5_layout()
+    if tab == "tab-evolution":
+        return _build_tab6_layout()
     return html.Div("Unknown tab")
 
 
@@ -938,14 +979,218 @@ def update_tab5(_n):
     return fig_main, fig_scatter, stats
 
 
-def register_callbacks_on(target_app: dash.Dash) -> None:
-    app_key = id(target_app)
-    if app_key in _REGISTERED_APPS:
-        return
-    _REGISTERED_APPS.add(app_key)
+def update_tab6(_n):
+    from cipher.training.improvement_analyzer import ImprovementAnalyzer
 
-    target_app.callback(Output("tab-content", "children"), Input("main-tabs", "value"))(render_tab)
-    target_app.callback(
+    analyzer = ImprovementAnalyzer()
+    frame = _load_rewards_csv()
+    evols = _load_evolution_log()
+    empty = go.Figure().update_layout(**PLOTLY_LAYOUT)
+
+    # ── Top chart: rewards (raw gray) + rolling avg (colored) + evolution lines ──
+    if frame is None or frame.empty:
+        fig_reward = empty
+    else:
+        episodes = frame["episode"].tolist()
+        red_vals = frame["red_total"].tolist()
+        blue_vals = frame["blue_total"].tolist()
+        red_ma = _moving_average(red_vals, window=10)
+        blue_ma = _moving_average(blue_vals, window=10)
+        evo_eps = [e.get("episode", 0) for e in evols]
+
+        fig_reward = go.Figure()
+        fig_reward.add_trace(
+            go.Scatter(
+                x=episodes, y=red_vals,
+                mode="lines", name="RED (raw)",
+                line=dict(color="#555555", width=1),
+                opacity=0.5,
+            )
+        )
+        fig_reward.add_trace(
+            go.Scatter(
+                x=episodes, y=blue_vals,
+                mode="lines", name="BLUE (raw)",
+                line=dict(color="#335588", width=1),
+                opacity=0.5,
+            )
+        )
+        fig_reward.add_trace(
+            go.Scatter(
+                x=episodes, y=red_ma,
+                mode="lines", name="RED 10-ep avg",
+                line=dict(color=RED_COLOR, width=2.5),
+            )
+        )
+        fig_reward.add_trace(
+            go.Scatter(
+                x=episodes, y=blue_ma,
+                mode="lines", name="BLUE 10-ep avg",
+                line=dict(color=BLUE_COLOR, width=2.5),
+            )
+        )
+        fig_reward.add_hline(y=0, line_color="#444", line_dash="dot")
+
+        # Gold vertical lines at each evolution event
+        for ep in evo_eps:
+            fig_reward.add_vline(
+                x=ep, line_color=GOLD_COLOR, line_width=1.5, line_dash="dash",
+                annotation_text=f"Evo@{ep}",
+                annotation_font_size=9,
+                annotation_font_color=GOLD_COLOR,
+            )
+
+        fig_reward.update_layout(
+            **PLOTLY_LAYOUT,
+            title="Reward Curves + Evolution Annotations",
+            xaxis_title="Episode",
+            yaxis_title="Reward",
+            legend=dict(orientation="h", y=1.12),
+        )
+
+    # ── Middle chart: win rate curves ──
+    win_data = analyzer.compute_rolling_win_rates(window=10)
+    if not win_data["episodes"]:
+        fig_winrate = empty
+    else:
+        fig_winrate = go.Figure()
+        fig_winrate.add_trace(
+            go.Scatter(
+                x=win_data["episodes"],
+                y=[v * 100 for v in win_data["red_win_rate"]],
+                mode="lines",
+                name="RED Win %",
+                line=dict(color=RED_COLOR, width=2.5),
+            )
+        )
+        fig_winrate.add_trace(
+            go.Scatter(
+                x=win_data["episodes"],
+                y=[v * 100 for v in win_data["blue_win_rate"]],
+                mode="lines",
+                name="BLUE Win %",
+                line=dict(color=BLUE_COLOR, width=2.5),
+            )
+        )
+        # Evolution lines on win rate chart too
+        for ep in [e.get("episode", 0) for e in evols]:
+            fig_winrate.add_vline(
+                x=ep, line_color=GOLD_COLOR, line_width=1.2, line_dash="dash",
+            )
+        fig_winrate.add_hline(y=50, line_color="#444", line_dash="dot")
+        fig_winrate.update_layout(
+            **PLOTLY_LAYOUT,
+            title="Rolling Win Rate (10-episode window)",
+            xaxis_title="Episode",
+            yaxis_title="Win Rate (%)",
+            legend=dict(orientation="h", y=1.12),
+        )
+        fig_winrate.update_yaxes(range=[0, 100])
+
+    # ── Bottom stats strip ──
+    early_late = analyzer.compute_early_late_comparison()
+    evo_summary = analyzer.get_evolution_summary()
+
+    def _delta_color(v: float) -> str:
+        return GREEN_COLOR if v > 0 else (RED_COLOR if v < 0 else TEXT_SECONDARY)
+
+    total_rules = evo_summary["total_red_rules"] + evo_summary["total_blue_rules"]
+
+    stats = html.Div(
+        [
+            html.Div(
+                "Training Improvement Summary",
+                style={
+                    "color": TEXT_MUTED,
+                    "fontSize": "10px",
+                    "textTransform": "uppercase",
+                    "letterSpacing": "1px",
+                    "marginBottom": "8px",
+                    "width": "100%",
+                },
+            ),
+            _stat(
+                "Early RED avg",
+                f"{early_late['early_red_avg']:+.3f}",
+                color=RED_COLOR,
+            ),
+            _stat(
+                "Late RED avg",
+                f"{early_late['late_red_avg']:+.3f}",
+                color=RED_COLOR,
+            ),
+            _stat(
+                "RED Improvement",
+                f"{early_late['red_improvement']:+.3f}",
+                color=_delta_color(early_late["red_improvement"]),
+            ),
+            _stat(
+                "Early Exfil Rate",
+                f"{early_late['early_exfil_rate'] * 100:.0f}%",
+            ),
+            _stat(
+                "Late Exfil Rate",
+                f"{early_late['late_exfil_rate'] * 100:.0f}%",
+                color=_delta_color(early_late["exfil_delta"]),
+            ),
+            _stat(
+                "Exfil Delta",
+                f"{early_late['exfil_delta'] * 100:+.0f}%",
+                color=_delta_color(early_late["exfil_delta"]),
+            ),
+            _stat(
+                "Early Abort Rate",
+                f"{early_late['early_abort_rate'] * 100:.0f}%",
+            ),
+            _stat(
+                "Late Abort Rate",
+                f"{early_late['late_abort_rate'] * 100:.0f}%",
+                color=_delta_color(-early_late["abort_delta"]),
+            ),
+            _stat(
+                "Abort Delta",
+                f"{early_late['abort_delta'] * 100:+.0f}%",
+                color=_delta_color(-early_late["abort_delta"]),
+            ),
+            _stat(
+                "Evolutions Applied",
+                str(evo_summary["total_evolutions"]),
+                color=GOLD_COLOR,
+            ),
+            _stat(
+                "Rules Added",
+                str(total_rules),
+                color=GOLD_COLOR,
+            ),
+        ],
+        style={"display": "flex", "gap": "16px", "padding": "8px 0", "flexWrap": "wrap"},
+    )
+
+    return fig_reward, fig_winrate, stats
+
+
+# ---------------------------------------------------------------------------
+# App layout and callback wiring
+# ---------------------------------------------------------------------------
+
+def get_live_dashboard() -> dash.Dash:
+    """Return the live training dashboard Dash app instance."""
+    return app
+
+
+def register_callbacks_on(target_app: dash.Dash) -> None:
+    """
+    Register all live-training callbacks on *target_app*.
+
+    Called once at startup for the module-level ``app``, and can be called
+    again to wire the same callbacks onto a fresh app instance (used in tests).
+    """
+    app_id = id(target_app)
+    if app_id in _REGISTERED_APPS:
+        return
+    _REGISTERED_APPS.add(app_id)
+
+    @target_app.callback(
         [
             Output("header-episode", "children"),
             Output("header-status", "children"),
@@ -955,8 +1200,18 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("live-indicator", "style"),
         ],
         Input("interval-component", "n_intervals"),
-    )(update_header)
-    target_app.callback(
+    )
+    def _header(n):
+        return update_header(n)
+
+    @target_app.callback(
+        Output("tab-content", "children"),
+        Input("main-tabs", "value"),
+    )
+    def _tab_content(tab):
+        return render_tab(tab)
+
+    @target_app.callback(
         [
             Output("t1-main-chart", "figure"),
             Output("t1-red-breakdown", "figure"),
@@ -964,33 +1219,72 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t1-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
-    )(update_tab1)
-    target_app.callback(
-        [Output("t2-table", "data"), Output("t2-stats", "children")],
-        [Input("interval-component", "n_intervals"), Input("t2-filter", "value")],
-    )(update_tab2)
-    target_app.callback(
-        [Output("t3-map", "figure"), Output("t3-events", "children"), Output("t3-stats", "children")],
+    )
+    def _tab1(n):
+        return update_tab1(n)
+
+    @target_app.callback(
+        [
+            Output("t2-table", "data"),
+            Output("t2-stats", "children"),
+        ],
+        [
+            Input("interval-component", "n_intervals"),
+            Input("t2-filter", "value"),
+        ],
+    )
+    def _tab2(n, filter_val):
+        return update_tab2(n, filter_val)
+
+    @target_app.callback(
+        [
+            Output("t3-map", "figure"),
+            Output("t3-events", "children"),
+            Output("t3-stats", "children"),
+        ],
         Input("interval-component", "n_intervals"),
-    )(update_tab3)
-    target_app.callback(
-        [Output("t4-verdicts", "data"), Output("t4-flags", "children"), Output("t4-stats", "children")],
+    )
+    def _tab3(n):
+        return update_tab3(n)
+
+    @target_app.callback(
+        [
+            Output("t4-verdicts", "data"),
+            Output("t4-flags", "children"),
+            Output("t4-stats", "children"),
+        ],
         Input("interval-component", "n_intervals"),
-    )(update_tab4)
-    target_app.callback(
-        [Output("t5-main", "figure"), Output("t5-scatter", "figure"), Output("t5-stats", "children")],
+    )
+    def _tab4(n):
+        return update_tab4(n)
+
+    @target_app.callback(
+        [
+            Output("t5-main", "figure"),
+            Output("t5-scatter", "figure"),
+            Output("t5-stats", "children"),
+        ],
         Input("interval-component", "n_intervals"),
-    )(update_tab5)
+    )
+    def _tab5(n):
+        return update_tab5(n)
+
+    @target_app.callback(
+        [
+            Output("t6-reward-chart", "figure"),
+            Output("t6-winrate-chart", "figure"),
+            Output("t6-stats", "children"),
+        ],
+        Input("interval-component", "n_intervals"),
+    )
+    def _tab6(n):
+        return update_tab6(n)
 
 
+# Wire callbacks onto the module-level app at import time.
 app.layout = create_live_layout()
 register_callbacks_on(app)
 
 
 if __name__ == "__main__":
-    port = config.dashboard_live_port
-    debug = os.environ.get("DASHBOARD_DEBUG", "false").lower() == "true"
-    print(f"\nCIPHER Live Dashboard -> http://localhost:{port}")
-    print(f"Update interval: {config.dashboard_live_update_interval}ms")
-    print("Reads: rewards_log.csv, training_events.jsonl, training_state.json\n")
-    app.run(debug=debug, port=port, host="0.0.0.0")
+    app.run(debug=False, port=8051)

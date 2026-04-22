@@ -38,7 +38,7 @@ class CipherConfig(BaseSettings):
     # ── LLM Backend ──────────────────────────────────────────────
     llm_backend: str = Field(
         "nvidia",
-        description="LLM provider: nvidia | huggingface | openai",
+        description="LLM provider: nvidia | local | hybrid",
     )
     llm_mode: str = Field(
         "stub",
@@ -93,10 +93,24 @@ class CipherConfig(BaseSettings):
         description="Model for Oversight Auditor agent",
     )
 
-    # ── HuggingFace (optional — Phase 14 only) ───────────────────
-    hf_token: str = Field("", description="HuggingFace token (Phase 14 only)")
-    hf_model_red: str = Field("", description="HuggingFace model for RED team")
-    hf_model_blue: str = Field("", description="HuggingFace model for BLUE team")
+    # ── HuggingFace ───────────────────────────────────────────────
+    hf_token: str = Field("", description="HuggingFace token for push/pull")
+    hf_model_red: str = Field(
+        "wolfie8935/cipher-red-planner-grpo",
+        description="HuggingFace repo for trained RED Planner",
+    )
+
+    # ── Local model server (hybrid competition mode) ─────────────
+    # After RunPod training: serve with LM Studio (port 1234) or
+    # vllm (port 8000) and set LLM_BACKEND=hybrid in .env
+    local_model_url: str = Field(
+        "http://localhost:1234/v1",
+        description="OpenAI-compatible local model server URL",
+    )
+    local_model_name: str = Field(
+        "cipher-red-planner",
+        description="Model name as registered in local server",
+    )
 
     # ── Environment parameters ───────────────────────────────────
     env_graph_size: int = Field(50, description="Number of nodes in enterprise network")

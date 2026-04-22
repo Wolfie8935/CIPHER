@@ -22,6 +22,7 @@ from pathlib import Path
 
 from cipher.environment.graph import generate_enterprise_graph
 from cipher.environment.scenario import ScenarioGenerator
+from cipher.training.prompt_evolver import PromptEvolver
 from cipher.utils.config import config
 from cipher.utils.logger import get_logger, log_reward
 
@@ -118,6 +119,7 @@ class TrainingLoop:
         training_start_time = datetime.now().isoformat()
         red_update_count = 0
         blue_update_count = 0
+        evolver = PromptEvolver()
 
         _write_training_state(
             {
@@ -353,6 +355,32 @@ class TrainingLoop:
 
                 red_update_count += 1
                 blue_update_count += 1
+
+                # ── Phase 9: prompt evolution ──────────────────────────────
+                if evolver.should_evolve(episode_num):
+                    changes = evolver.evolve(episode_num)
+                    rules_added = (
+                        changes.get("red_rules_added", 0)
+                        + changes.get("blue_rules_added", 0)
+                    )
+                    if rules_added > 0:
+                        _append_training_event(
+                            {
+                                "episode": episode_num,
+                                "event_type": "prompt_evolved",
+                                "detail": (
+                                    f"Evolution #{changes['evolution_number']}: "
+                                    f"RED +{changes.get('red_rules_added', 0)} rules, "
+                                    f"BLUE +{changes.get('blue_rules_added', 0)} rules"
+                                ),
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "step": 0,
+                                "agent": "prompt_evolver",
+                                "team": "system",
+                            }
+                        )
+                # ── end Phase 9 ────────────────────────────────────────────
+
                 _append_training_event(
                     {
                         "episode": episode_num,
@@ -413,6 +441,23 @@ class TrainingLoop:
                 "blue_policy_updates": blue_update_count,
             }
         )
+
+
+def run_training(n_episodes: int = 3, verbose: bool = True) -> None:
+    """
+    Convenience wrapper used by the Phase 9 verification script.
+
+    >>> run_training(n_episodes=30, verbose=False)
+    """
+    if not verbose:
+        import logging
+        logging.disable(logging.CRITICAL)
+    try:
+        TrainingLoop(n_episodes=n_episodes).run()
+    finally:
+        if not verbose:
+            import logging
+            logging.disable(logging.NOTSET)
 
 
 def _parse_args() -> argparse.Namespace:

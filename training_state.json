@@ -3,8 +3,8 @@
   "current_episode": 50,
   "total_episodes": 50,
   "llm_mode": "stub",
-  "started_at": "2026-04-22T00:21:11.974576",
-  "last_updated": "2026-04-22T00:21:22.921966",
+  "started_at": "2026-04-22T23:59:51.400814",
+  "last_updated": "2026-04-22T23:59:52.719109",
   "red_policy_updates": 50,
   "blue_policy_updates": 50
 }

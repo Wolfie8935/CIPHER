@@ -280,9 +280,17 @@ class DeadDropVault:
         Clear all drops from the vault. Called at episode start.
 
         Removes all .drop files and resets the index.
+        On Windows-mounted or read-only filesystems, deletion may be
+        silently skipped (the index is still reset so the drops are
+        logically invisible to the new episode).
         """
         for filepath in self.vault_dir.glob("*.drop"):
-            filepath.unlink()
+            try:
+                filepath.unlink()
+            except (PermissionError, OSError):
+                # On NTFS-mounted paths the file may not be unlinkable;
+                # reset the index anyway so old drops are invisible.
+                pass
 
         self._index = {}
         self._save_index()
