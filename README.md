@@ -1,124 +1,157 @@
-# CIPHER
+# CIPHER — Adversarial Multi-Agent RL Environment
 
-Adversarial multi-agent environment where RED infiltrates and exfiltrates while BLUE detects, misdirects, and traps.
+**OpenEnv Hackathon | Theme 1: Multi-Agent Interactions**
 
-## Current Build Status
+CIPHER is a fully adversarial, asymmetric, partially observable multi-agent RL environment. A **RED team** of 4 LLM-powered agents infiltrates a procedurally generated 50-node enterprise network to steal a classified file. A **BLUE team** of 4 LLM agents defends using honeypots, dead drop tampering, and false escalations. An independent **Oversight Auditor** judges every episode.
+
+```
+python main.py          # Watch the competition — no setup needed
+```
+
+---
+
+## What CIPHER Demonstrates
+
+| Capability | How |
+|-----------|-----|
+| Multi-agent coordination | 8 simultaneous agents with conflicting objectives |
+| Theory-of-mind reasoning | Agents model adversary beliefs via dead drops and deception |
+| Scalable oversight | Oversight Auditor monitors all 8 agents, detects reward hacking |
+| Uncapped rewards | Complexity multiplier scales with zone traversal (no ceiling) |
+| Self-improvement | Prompt evolution every 10 episodes based on reward heuristics |
+| Trained specialist | RED Planner fine-tuned via Unsloth GRPO (LoRA adapter included) |
+
+---
+
+## Build Status
 
 | Phase | What | Status |
 |-------|------|--------|
-| 1 — Skeleton | Project structure, 8 stub agents, dead drops | ✅ Complete |
-| 2 — Environment | 50-node zone-based network, suspicion mechanics | ✅ Complete |
-| 3 — LLM Integration | NVIDIA NIM, real agent reasoning | ✅ Complete |
-| 4 — Agent Prompting | 8 specialized prompt templates, action parsing | ✅ Complete |
-| 5 — Trap Layer | FalseTrail, HoneypotPoison, DeadDropTamper | ✅ Complete |
-| 6 — Reward Functions | Full continuous rewards, reward_logger.py | ✅ Complete |
-| 7 — Oversight Agent | OversightAuditor (9th agent), fleet bonus | ✅ Complete |
-| 8 — Training Loop | Self-play, reward curves + live state/event outputs | ✅ Complete |
-| 12 — Dashboard | Episode replay visualization | ✅ Complete |
-| 13 — Live Dashboard | Real-time training mode in unified dashboard app | ✅ Complete |
-| 14 — HuggingFace | Awaiting compute credits | ⬜ Not Started |
+| 1 | Foundation, config, logging | ✅ |
+| 2 | 50-node network, zones, state, observations | ✅ |
+| 3 | All 8 LLM agents, stub/live/hybrid modes | ✅ |
+| 4 | Scenario generation, auto-difficulty escalation | ✅ |
+| 5 | Full trap system (12 traps, budget enforcement) | ✅ |
+| 6 | Reward functions, RewardLogger, variance verified | ✅ |
+| 7 | Oversight Auditor, fleet verdicts, reward hacking flags | ✅ |
+| 8 | OpenEnv API compliance wrapper (CIPHEREnv) | ✅ |
+| 9 | Prompt evolution learning loop | ✅ |
+| 10 | Improvement metrics + Dashboard Learning Curve tab | ✅ |
+| 11 | Google Colab Unsloth GRPO training notebook | ✅ |
+| 12 | Replay Dashboard (port 8050, episode trace scrubber) | ✅ |
+| 13 | Live Training Dashboard (unified, 6 tabs, auto-poll) | ✅ |
 
-Tests passing: **~214** | Reward logging: **rewards_log.csv** + **training_events.jsonl** + **training_state.json** | Fleet verdict: per-episode | Modes: `LLM_MODE=stub` (free) / `LLM_MODE=live` (NVIDIA)
+**Tests: 290 passing, 0 failing**
 
-## Project Layout
-
-- `cipher/environment/graph.py` — enterprise topology generation.
-- `cipher/environment/observation.py` — RED/BLUE observation asymmetry engine.
-- `cipher/environment/state.py` — ground-truth episode state.
-- `cipher/environment/traps.py` — Phase 5 trap registry and effect engine.
-- `cipher/memory/dead_drop.py` — MEMENTO dead drop schema and vault.
-- `cipher/agents/` — 8 role-specific RED/BLUE agents and prompts.
-- `cipher/training/_episode_runner.py` — single-episode execution loop.
+---
 
 ## Setup
 
-### Option A: Conda (reproducible)
-
 ```bash
+# Option A: pip
+python -m venv .venv
+.venv\Scripts\activate    # Windows
+pip install -r requirements.txt
+
+# Option B: conda
 conda env create -f environment.yml
 conda activate cipher
 ```
 
-### Option B: pip
-
-```bash
-python -m venv .venv
-. .venv/bin/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## Quick Start
-
-```bash
-# Stub mode (free, no API calls)
-python main.py
-
-# Live mode (NVIDIA API)
-python main.py --live
-
-# Full test suite
-pytest tests/ -v --tb=short
-
-# Training loop (10 episodes, stub mode)
-LLM_MODE=stub python -m cipher.training.loop --episodes 10
-
-# Disable trace saving (on by default in main.py)
-python main.py --no-trace
-```
+---
 
 ## Run
 
-### Stub mode (no API calls)
-
 ```bash
+# Single episode, stub mode (no API key needed, instant)
 python main.py
-```
 
-### Live mode (NVIDIA API)
+# 5-episode competition with standings
+python main.py --episodes 5
 
-```bash
+# Use trained RED Planner LoRA (requires "red trained/" folder)
+python main.py --hybrid
+
+# All agents use NVIDIA NIM LLMs (requires NVIDIA_API_KEY)
 python main.py --live
+
+# Training loop (10 episodes, writes rewards_log.csv)
+python main.py --train
+
+# Verify all 23 module imports resolve
+python main.py --check
 ```
 
-## Unified Dashboard (Replay + Live)
+See `commands.md` for the full command reference.
 
-One app, two modes:
+---
 
-- **Entry point:** `python -m cipher.dashboard.app`
-- **URL:** `http://localhost:8050`
-- **Mode switch:** use `Dashboard Mode` at the top (`Replay` / `Live Training`)
-
-Recommended demo flow:
+## Dashboard
 
 ```bash
-# Terminal 1: run training
-LLM_MODE=stub python -m cipher.training.loop --episodes 50
-
-# Terminal 2: open unified dashboard
 python -m cipher.dashboard.app
-# http://localhost:8050
+# Open: http://localhost:8050
 ```
 
-## Verification Commands (Phase 5)
+Toggle between **Episode Replay** (step through saved traces) and **Live Training** (6 real-time tabs: Rewards, Dead Drops, Network Map, Oversight, Difficulty, Learning Curve).
+
+Recommended judge demo:
 
 ```bash
-# 1) Full suite
-pytest tests/ -v --tb=short
+# Terminal 1 — run training
+python main.py --train --train-episodes 50
 
-# 2) Trap registry init
-python -c "import os; os.environ['LLM_MODE']='stub'; from cipher.environment.traps import TrapRegistry; from cipher.utils.config import config; r=TrapRegistry(config); assert r.red_trap_budget==config.env_trap_budget_red; assert r.blue_trap_budget==config.env_trap_budget_blue; assert r.active_red_traps==[]; assert r.active_blue_traps==[]; print('TrapRegistry init: PASSED')"
-
-# 3) Budget enforcement
-python -c "import os; os.environ['LLM_MODE']='stub'; from cipher.environment.traps import TrapRegistry, RedTrapType; from cipher.utils.config import config; r=TrapRegistry(config); [r.place_red_trap(RedTrapType.FALSE_TRAIL,'operative',i,i,{}) for i in range(config.env_trap_budget_red)]; ok,_=r.place_red_trap(RedTrapType.FALSE_TRAIL,'operative',99,99,{}); assert not ok; print('Budget enforcement: PASSED')"
-
-# 4) Main still runs and emits trap events
-python main.py
+# Terminal 2 — watch it live
+python -m cipher.dashboard.app
 ```
 
-## Notes
+---
 
-- Keep `LLM_MODE=stub` for offline testing.
-- Trap events are logged as `TRAP EVENT:` lines in episode output.
-- Dead-drop tampering intentionally preserves old integrity hash so RED can detect corruption via `verify() == False`.
-- `main.py` now saves episode traces by default to support Phase 12 dashboard replay testing.
-- Use `--no-trace` only when you explicitly want to skip trace file generation.
+## OpenEnv Compliance
+
+```bash
+python verify_openenv.py   # CIPHEREnv reset/step/render/metadata verified
+```
+
+`CIPHEREnv` inherits from `openenv.env.env.Env`. One `env.step()` = one full episode. The trained agent is the RED Planner — its first action drives strategic direction for the episode.
+
+---
+
+## Hybrid Mode (Trained LoRA Specialist)
+
+The `red trained/cipher-red-planner/` folder contains a Llama-3.2-1B LoRA adapter fine-tuned via Unsloth GRPO on 50 episodes of self-play. In hybrid mode, the RED Planner uses this local model while all other agents use NVIDIA NIM.
+
+```bash
+python main.py --hybrid   # loads adapter automatically
+```
+
+Training notebook: `CIPHER_Training_Colab.ipynb` (runs free on Google Colab T4).
+
+---
+
+## Tests
+
+```bash
+python -m pytest tests/         # 290 tests, ~6s
+python -m pytest tests/ -v      # verbose
+python -m pytest tests/ -k "reward"  # filter by keyword
+```
+
+---
+
+## Project Layout
+
+```
+cipher/
+├── agents/           8 role-specific agents (RED: Planner/Analyst/Operative/Exfiltrator,
+│   └── prompts/      BLUE: Surveillance/ThreatHunter/DeceptionArchitect/Forensics)
+├── environment/      Graph, state, observations, scenario generation, traps
+├── rewards/          RED/BLUE/Oversight reward functions + RewardLogger
+├── memory/           Dead drop vault (RED inter-agent memory)
+├── training/         Episode runner, training loop, prompt evolver, improvement analyzer
+├── dashboard/        Unified Dash app (replay + live)
+├── utils/            Config, logger, LLM client, LoRA client, mode toggle
+env_wrapper.py        OpenEnv-compliant CIPHEREnv
+main.py               Competition display CLI
+commands.md           Full command reference
+```

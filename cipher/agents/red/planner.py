@@ -39,53 +39,68 @@ class RedPlanner(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
                          reasoning="No observation — waiting.")
 
-        # Abort if suspicion is dangerously high
-        if obs.estimated_suspicion > 0.85:
-            return Action(agent_id=self.agent_id, action_type=ActionType.ABORT,
-                         reasoning=f"Suspicion critical ({obs.estimated_suspicion:.2f}). Aborting.")
-
-        # Write dead drop on context reset or periodically
-        if obs.context_reset_this_step or (self.step_count % 8 == 0 and self.step_count > 0):
-            return Action(agent_id=self.agent_id, action_type=ActionType.WRITE_DEAD_DROP,
-                         reasoning="Writing operational continuity dead drop.")
-
-        # Strategic movement — prefer moving toward higher zones
-        if obs.adjacent_nodes:
-            # Get zone info for adjacent nodes
-            deeper = []
-            same = []
-            for i, node_id in enumerate(obs.adjacent_nodes):
-                adj_type = obs.adjacent_node_types[i] if i < len(obs.adjacent_node_types) else None
-                # We don't have zone info per adjacent node directly,
-                # but zone_boundary_ahead tells us if deeper zones are accessible
-                same.append(node_id)
-
-            if obs.zone_boundary_ahead and obs.estimated_suspicion < 0.5:
-                # Move to a random adjacent (might cross zone)
-                target = random.choice(obs.adjacent_nodes)
-                return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
-                             target_node=target,
-                             reasoning=f"Advancing toward zone boundary via node {target}.")
-
-            target = random.choice(obs.adjacent_nodes)
-            return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
-                         target_node=target,
-                         reasoning=f"Lateral movement within zone {obs.current_zone}.")
-
-        # Exfiltrate if at HVT
+        # PRIORITY 1: Exfiltrate if at HVT — must check BEFORE abort logic
         node_type_val = obs.current_node_type.value if hasattr(obs.current_node_type, 'value') else str(obs.current_node_type)
         if node_type_val == "high_value_target" and obs.files_at_current_node:
-            target_file = obs.files_at_current_node[0]
+            already_attempted = {
+                a.target_file for a in self.action_history
+                if a.action_type == ActionType.EXFILTRATE and a.target_file
+            }
+            remaining = [f for f in obs.files_at_current_node if f not in already_attempted]
+            target_file = remaining[0] if remaining else obs.files_at_current_node[0]
             return Action(agent_id=self.agent_id, action_type=ActionType.EXFILTRATE,
                          target_file=target_file,
                          reasoning=f"At HVT — exfiltrating {target_file}.")
 
-        # Read files if available
-        if obs.files_at_current_node:
-            target_file = random.choice(obs.files_at_current_node)
-            return Action(agent_id=self.agent_id, action_type=ActionType.READ_FILE,
-                         target_file=target_file,
-                         reasoning=f"Reading {target_file} for intel.")
+        # PRIORITY 2: Move toward HVT if adjacent
+        adj_zones = getattr(obs, 'adjacent_node_zones', [])
+        adj_types = obs.adjacent_node_types or []
+        if obs.adjacent_nodes:
+            # Find HVT-type adjacent nodes
+            hvt_neighbors = [
+                obs.adjacent_nodes[i]
+                for i, t in enumerate(adj_types)
+                if (t.value if hasattr(t, 'value') else str(t)) == "high_value_target"
+            ]
+            if hvt_neighbors:
+                target = hvt_neighbors[0]
+                return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                             target_node=target,
+                             reasoning=f"HVT detected adjacent — moving to node {target}.")
+
+            # PRIORITY 3: Advance to deeper zone when possible
+            if adj_zones:
+                deeper = [
+                    obs.adjacent_nodes[i]
+                    for i, z in enumerate(adj_zones)
+                    if z > obs.current_zone
+                ]
+                if deeper and obs.estimated_suspicion < 0.70:
+                    target = random.choice(deeper)
+                    return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                                 target_node=target,
+                                 reasoning=f"Advancing to Zone {obs.current_zone + 1} via node {target}.")
+            elif obs.zone_boundary_ahead and obs.estimated_suspicion < 0.70:
+                target = random.choice(obs.adjacent_nodes)
+                return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                             target_node=target,
+                             reasoning=f"Crossing zone boundary from Zone {obs.current_zone}.")
+
+            # PRIORITY 4: Move within zone (continue exploration)
+            target = random.choice(obs.adjacent_nodes)
+            return Action(agent_id=self.agent_id, action_type=ActionType.MOVE,
+                         target_node=target,
+                         reasoning=f"Lateral movement in Zone {obs.current_zone}.")
+
+        # Abort if suspicion is dangerously high and NOT at HVT
+        if obs.estimated_suspicion > 0.90:
+            return Action(agent_id=self.agent_id, action_type=ActionType.ABORT,
+                         reasoning=f"Suspicion critical ({obs.estimated_suspicion:.2f}). Aborting.")
+
+        # Write dead drop on context reset
+        if obs.context_reset_this_step:
+            return Action(agent_id=self.agent_id, action_type=ActionType.WRITE_DEAD_DROP,
+                         reasoning="Writing operational continuity dead drop after context reset.")
 
         return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
                      reasoning="Holding position — assessing situation.")

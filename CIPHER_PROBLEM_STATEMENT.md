@@ -64,7 +64,7 @@ Understanding which bonus prizes CIPHER qualifies for and how to make the claim 
 
 ---
 
-## SECTION 3 — COMPLETED PHASES (1–7 + 12–13)
+## SECTION 3 — COMPLETED PHASES (1–13, excl. HF Spaces/Blog)
 
 ### ✅ Phase 1 — Project Foundation
 **Built:** `CipherConfig` dataclass with all environment parameters. Structured logging via `cipher.utils.logger` with `get_logger()`. Module-level constants for zones, node types, action vocabularies. Folder structure establishing the full package layout. `cipher/utils/config.py` with environment variable overrides for every setting.
@@ -168,9 +168,9 @@ All traps logged to `state.trap_events` and emitted as `training_events.jsonl` e
 
 ---
 
-## SECTION 4 — PHASES TO BUILD (8–15)
+## SECTION 4 — PHASES OVERVIEW (8–15 STATUS)
 
-### ❌ PHASE 8 — OpenEnv API Compliance Wrapper
+### ✅ PHASE 8 — OpenEnv API Compliance Wrapper
 **Priority: CRITICAL — Build First**
 **Compute needed: Local machine only**
 **Estimated time: 4–6 hours**
@@ -540,7 +540,7 @@ pytest tests/test_phase8_openenv.py -v
 
 ---
 
-### ❌ PHASE 9 — Prompt Evolution (The Learning Loop)
+### ✅ PHASE 9 — Prompt Evolution (The Learning Loop)
 **Priority: CRITICAL — Build Second**
 **Compute needed: Local machine only**
 **Estimated time: 6–8 hours**
@@ -617,7 +617,7 @@ print('Prompt evolution: PASSED')
 
 ---
 
-### ❌ PHASE 10 — Reward Improvement Metrics + Dashboard Tab 6
+### ✅ PHASE 10 — Reward Improvement Metrics + Dashboard Tab 6
 **Priority: HIGH — Build Third**
 **Compute needed: Local machine only**
 **Estimated time: 4–5 hours**
@@ -663,7 +663,7 @@ A screenshot of Tab 6 showing the RED rolling win rate curve trending upward fro
 
 ---
 
-### ❌ PHASE 11 — Google Colab Training Notebook
+### ✅ PHASE 11 — Google Colab Training Notebook
 **Priority: CRITICAL — Build Fourth**
 **Compute needed: Google Colab (free T4 GPU) for demo, RunPod for extended runs**
 **Estimated time: 8–10 hours**
@@ -934,7 +934,7 @@ run_training(n_episodes=200, verbose=True)
 
 ---
 
-### ❌ PHASE 12 — HuggingFace Spaces Deployment
+### ⏭ PHASE 12 (SKIPPED) — HuggingFace Spaces Deployment
 **Priority: CRITICAL — Mandatory requirement**
 **Compute needed: HuggingFace Spaces (free CPU)**
 **Estimated time: 3–4 hours**
@@ -994,7 +994,7 @@ tags:
 
 ---
 
-### ❌ PHASE 13 — HuggingFace Blog Post
+### ⏭ PHASE 13 (SKIPPED) — HuggingFace Blog Post
 **Priority: HIGH — Mandatory requirement**
 **Compute needed: None**
 **Estimated time: 3–4 hours**
@@ -1154,22 +1154,19 @@ After the extended training run, update:
 | 5 | Full trap system (12 traps total) | Local | ✅ Done | — |
 | 6 | Reward functions, RewardLogger, variance | Local | ✅ Done | — |
 | 7 | Oversight Auditor, fleet verdicts, flags | Local | ✅ Done | — |
-| 8 | **OpenEnv API compliance wrapper** | Local | ❌ Now | Disqualifying if missing |
-| 9 | **Prompt evolution learning loop** | Local | ❌ Now | Reward improvement curve |
-| 10 | **Improvement metrics + Dashboard Tab 6** | Local | ❌ Now | 20% judging criterion |
-| 11 | **Colab notebook (Unsloth GRPO)** | Colab T4 + RunPod | ❌ Now | Mandatory requirement |
-| 12 | **HuggingFace Spaces deployment** | HF Spaces | ❌ Now | Mandatory requirement |
+| 8 | OpenEnv API compliance wrapper | Local | ✅ Done | — |
+| 9 | Prompt evolution learning loop | Local | ✅ Done | — |
+| 10 | Improvement metrics + Dashboard Tab 6 | Local | ✅ Done | — |
+| 11 | Colab notebook (Unsloth GRPO) | Colab T4 | ✅ Done | — |
+| 12 | HuggingFace Spaces deployment | HF Spaces | ⏭ Skipped | — |
 | 13 | Replay + Live Training unified dashboard | Local | ✅ Done | — |
-| 14 | **HuggingFace blog post** | None | ❌ Now | Mandatory requirement |
-| 15 | **Extended training onsite (25th/26th)** | HF compute credits | ⏳ Onsite | Demo quality |
+| 14 | HuggingFace blog post | None | ⏭ Skipped | — |
+| 15 | Extended training onsite (25th/26th) | HF compute credits | ⏳ Onsite | Demo quality |
 
-**Test count progression:**
+**Test count (final):**
 - After Phase 7: 179 tests
-- After Phase 13: 218 tests
-- After Phase 8: ~230 tests
-- After Phase 9: ~245 tests
-- After Phase 10: ~255 tests
-- **Target at submission: 255+ tests, 0 failing**
+- After Phase 13: 290 tests ✅ (all passing)
+- **Actual at submission: 290 tests, 0 failing**
 
 ---
 

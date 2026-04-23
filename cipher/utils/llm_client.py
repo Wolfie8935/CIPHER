@@ -39,18 +39,26 @@ class LLMClient:
     - Token counting and logging
     """
 
-    MAX_RETRIES = 3
-    RETRY_BASE_DELAY = 2.0
-    REQUEST_TIMEOUT = 30.0
+    MAX_RETRIES = 3          # up to 3 attempts before fallback
+    RETRY_BASE_DELAY = 1.0
+    REQUEST_TIMEOUT = 12.0   # 12s per call max; fallback on timeout
 
     def __init__(self) -> None:
         self.backend = config.llm_backend
 
         if self.backend == "nvidia":
+            _extra_headers = {}
+            if "openrouter" in config.nvidia_base_url:
+                # OpenRouter requires these headers to identify the calling app.
+                _extra_headers = {
+                    "HTTP-Referer": "https://github.com/Wolfie8935/CIPHER",
+                    "X-Title": "CIPHER-MARL",
+                }
             self._nvidia = OpenAI(
                 base_url=config.nvidia_base_url,
                 api_key=config.nvidia_api_key,
                 timeout=self.REQUEST_TIMEOUT,
+                default_headers=_extra_headers if _extra_headers else None,
             )
             self._local = None
 
@@ -64,10 +72,17 @@ class LLMClient:
 
         elif self.backend == "hybrid":
             # RED Planner uses the trained local model; everyone else uses NVIDIA NIM.
+            _extra_headers = {}
+            if "openrouter" in config.nvidia_base_url:
+                _extra_headers = {
+                    "HTTP-Referer": "https://github.com/Wolfie8935/CIPHER",
+                    "X-Title": "CIPHER-MARL",
+                }
             self._nvidia = OpenAI(
                 base_url=config.nvidia_base_url,
                 api_key=config.nvidia_api_key,
                 timeout=self.REQUEST_TIMEOUT,
+                default_headers=_extra_headers if _extra_headers else None,
             )
             self._local = OpenAI(
                 base_url=config.local_model_url,
@@ -90,6 +105,7 @@ class LLMClient:
         max_tokens: int = 512,
         temperature: float = 0.7,
         expect_json: bool = True,
+        team: str = "red",
     ) -> str:
         """
         Make a completion request, routed to the correct backend.
@@ -104,12 +120,12 @@ class LLMClient:
             expect_json: If True, appends JSON reminder and validates response.
 
         Returns:
-            Model response as string. Never raises — returns fallback WAIT on failure.
+            Model response as string. Never raises — returns fallback WAIT/STAND_DOWN on failure.
         """
         client, model_name = self._resolve(model_env_key)
         if client is None or model_name is None:
             logger.error(f"Cannot resolve client/model for key '{model_env_key}'.")
-            return self._fallback_action()
+            return self._fallback_action(team)
 
         if expect_json:
             messages = [dict(m) for m in messages]
@@ -146,7 +162,7 @@ class LLMClient:
                             f"Invalid JSON (attempt {attempt}): {e}. Raw: {content[:200]}"
                         )
                         if attempt == self.MAX_RETRIES:
-                            return self._fallback_action()
+                            return self._fallback_action(team)
                         time.sleep(self.RETRY_BASE_DELAY * attempt)
                         continue
 
@@ -155,23 +171,35 @@ class LLMClient:
             except RateLimitError:
                 wait = self.RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(f"Rate limit (attempt {attempt}). Waiting {wait}s.")
-                time.sleep(wait)
+                if attempt < self.MAX_RETRIES:
+                    time.sleep(wait)
 
             except APITimeoutError:
                 logger.warning(f"API timeout (attempt {attempt}).")
-                time.sleep(self.RETRY_BASE_DELAY * attempt)
+                if attempt < self.MAX_RETRIES:
+                    time.sleep(self.RETRY_BASE_DELAY * attempt)
 
             except APIConnectionError as e:
                 logger.error(f"API connection error: {e}")
-                time.sleep(self.RETRY_BASE_DELAY * attempt)
+                if attempt < self.MAX_RETRIES:
+                    time.sleep(self.RETRY_BASE_DELAY * attempt)
 
             except Exception as e:
+                err_str = str(e)
+                # Fast-fail on 404: bad model name will never succeed — don't waste retries
+                if "404" in err_str or "NotFoundError" in type(e).__name__:
+                    logger.error(
+                        f"Model not found (404) for '{model_name}'. "
+                        f"Check NVIDIA_MODEL_* values in .env. Falling back immediately."
+                    )
+                    return self._fallback_action(team)
                 logger.error(f"Unexpected LLM error (attempt {attempt}): {type(e).__name__}: {e}")
                 if attempt == self.MAX_RETRIES:
-                    return self._fallback_action()
+                    return self._fallback_action(team)
                 time.sleep(self.RETRY_BASE_DELAY * attempt)
 
-        return self._fallback_action()
+        return self._fallback_action(team)
+
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
@@ -197,37 +225,36 @@ class LLMClient:
         return None, None
 
     @staticmethod
+    def _fallback_action(team: str = "red") -> str:
+        """Return a safe WAIT/STAND_DOWN action JSON as a fallback when the LLM fails."""
+        # BLUE team does NOT have a 'wait' action — use stand_down instead
+        action = "wait" if team == "red" else "stand_down"
+        return json.dumps({
+            "action_type": action,
+            "target_node": None,
+            "target_file": None,
+            "reasoning": f"LLM unavailable — defaulting to {action.upper()}.",
+        })
+
+    @staticmethod
     def _strip_json_fences(text: str) -> str:
+        """Strip markdown code fences from LLM response."""
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines).strip()
+            text = "\n".join(
+                line for line in lines
+                if not line.strip().startswith("```")
+            ).strip()
         return text
 
-    @staticmethod
-    def _fallback_action() -> str:
-        return json.dumps({
-            "action_type": "wait",
-            "target_node": None,
-            "target_file": None,
-            "reasoning": "API unavailable — defaulting to WAIT for safety.",
-        })
+
+_llm_client_instance: "LLMClient | None" = None
 
 
-# Singleton — one client shared across all agents in a process
-_client_instance: LLMClient | None = None
-
-
-def get_llm_client() -> LLMClient:
-    """Returns the singleton LLMClient. Creates it on first call."""
-    global _client_instance
-    if _client_instance is None:
-        _client_instance = LLMClient()
-    return _client_instance
-
-
-def reset_llm_client() -> None:
-    """Force recreation of the singleton (useful after changing LLM_BACKEND at runtime)."""
-    global _client_instance
-    _client_instance = None
+def get_llm_client() -> "LLMClient":
+    """Return a singleton LLMClient instance."""
+    global _llm_client_instance
+    if _llm_client_instance is None:
+        _llm_client_instance = LLMClient()
+    return _llm_client_instance

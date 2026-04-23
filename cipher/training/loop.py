@@ -164,6 +164,7 @@ class TrainingLoop:
                     scenario=scenario,
                     graph=graph,
                     cfg=config,
+                    episode_number=episode_num,
                     max_steps=10,  # Short episodes for Phase 1
                     verbose=False,
                 )

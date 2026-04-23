@@ -73,6 +73,7 @@ class Scenario:
         }
     )
     generated_graph: Any | None = None
+    episode_number: int = 1
 
     def __iter__(self):
         """Allow `scenario, graph = generator.generate(...)` unpacking."""
@@ -182,6 +183,7 @@ class ScenarioGenerator:
                 honeypot_density=config.env_honeypot_density,
                 seed=episode_seed,
             ),
+            episode_number=episode_number,
         )
 
         logger.debug(

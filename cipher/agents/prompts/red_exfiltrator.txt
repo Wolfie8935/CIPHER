@@ -44,6 +44,6 @@ OUTPUT FORMAT (always valid JSON, no other text):
 
 
 ## LEARNED HEURISTICS (Auto-evolved)
-- LEARNED: Top-quartile episodes maintained stealth score 0.29. WAIT or use false_trail trap when suspicion exceeds 0.76.
-- LEARNED: You are aborting in 70% of episodes. Continue the operation unless suspicion exceeds 0.75. Aborting costs -0.30.
-- LEARNED: Top-quartile episodes achieve complexity multiplier 1.61x by traversing multiple zones. Prioritize crossing zone boundaries before exfiltrating.
+- LEARNED: Top-quartile episodes maintained stealth score 0.54. WAIT or use false_trail trap when suspicion exceeds 0.51.
+- LEARNED: You are aborting in 77% of episodes. Continue the operation unless suspicion exceeds 0.75. Aborting costs -0.30.
+- LEARNED: Top-quartile episodes achieve complexity multiplier 1.61x by traversing multiple zones. Prioritiz- LEARNED: Top-quartile episodes achieve complexity multiplier 1.57x by traversing multiple zones. Prioritize crossing zone boundaries before exfiltrating.

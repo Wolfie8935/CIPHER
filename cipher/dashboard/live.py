@@ -53,9 +53,32 @@ server = app.server
 _REGISTERED_APPS: set[int] = set()
 
 
+def _tab_header(title: str, description: str) -> html.Div:
+    """Consistent header for each tab explaining what you're looking at."""
+    return html.Div(
+        [
+            html.Div(title, style={
+                "fontSize": "14px", "fontWeight": "700",
+                "color": TEXT_PRIMARY, "marginBottom": "4px",
+            }),
+            html.Div(description, style={
+                "fontSize": "11px", "color": TEXT_MUTED,
+                "borderLeft": f"2px solid {BORDER_COLOR}",
+                "paddingLeft": "8px", "marginBottom": "12px",
+            }),
+        ]
+    )
+
+
 def _build_tab1_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Reward Curves — RED vs BLUE",
+                "Each bar/line = one episode. RED (attacker) scores high for exfiltrating data stealthily. "
+                "BLUE (defender) scores high for detecting and blocking. "
+                "Rewards trend upward as agents learn from prompt evolution.",
+            ),
             dcc.Graph(id="t1-main-chart", style={"height": "280px"}),
             dcc.Graph(id="t1-red-breakdown", style={"height": "180px"}),
             dcc.Graph(id="t1-blue-breakdown", style={"height": "180px"}),
@@ -67,6 +90,13 @@ def _build_tab1_layout() -> html.Div:
 def _build_tab2_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Dead Drops — RED Team Memory System",
+                "RED agents leave encrypted 'dead drops' (messages) at nodes so they can "
+                "resume after context resets (similar to how a spy leaves notes for themselves). "
+                "BLUE can discover and tamper with these drops to feed RED false intel. "
+                "High efficiency (close to 1.0) means compact, useful messages. Tampered = BLUE poisoned it.",
+            ),
             html.Div(
                 [
                     dcc.Dropdown(
@@ -128,6 +158,13 @@ def _build_tab2_layout() -> html.Div:
 def _build_tab3_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Network Map — Trap Heatmap",
+                "The 50-node enterprise network. Zone 0=Perimeter (gray) → Zone 1=General (blue) → "
+                "Zone 2=Sensitive (amber) → Zone 3=Critical/HVT (red). "
+                "Node size = trap activity (larger = more trap events there). "
+                "Gold rings = active traps. RED path = red trail. BLUE investigated = blue marks.",
+            ),
             dcc.Graph(id="t3-map", style={"height": "480px"}),
             html.Div(id="t3-events", style={"marginTop": "8px"}),
             html.Div(id="t3-stats", style={"marginTop": "8px"}),
@@ -138,9 +175,17 @@ def _build_tab3_layout() -> html.Div:
 def _build_tab4_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Oversight Feed — Independent AI Judge",
+                "An Oversight Auditor LLM watches all 8 agents and issues verdicts after every episode. "
+                "Verdicts: red_dominates (RED succeeded), blue_dominates (BLUE blocked), "
+                "contested (close match), degenerate (neither team performed well). "
+                "Flags fire when reward hacking or collusion is suspected. "
+                "Fleet bonuses (±0.15) are applied to final rewards based on verdict.",
+            ),
             html.Div(id="t4-stats", style={"marginBottom": "12px"}),
             html.Div(
-                "Fleet Verdicts",
+                "Fleet Verdicts by Episode",
                 style={"color": TEXT_MUTED, "fontSize": "11px", "marginBottom": "4px"},
             ),
             dash_table.DataTable(
@@ -197,6 +242,13 @@ def _build_tab4_layout() -> html.Div:
 def _build_tab5_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Difficulty Curve — Auto-Escalating Challenge",
+                "Difficulty starts at 0.30 and auto-escalates based on recent win rate "
+                "(increases if RED wins >60% of last 10 episodes, decreases if <30%). "
+                "This forces agents to generalize rather than memorize. "
+                "Expected pattern: rewards slightly decrease as difficulty rises, then recover as agents adapt.",
+            ),
             dcc.Graph(id="t5-main", style={"height": "280px"}),
             dcc.Graph(id="t5-scatter", style={"height": "240px"}),
             html.Div(id="t5-stats", style={"marginTop": "8px"}),
@@ -207,13 +259,20 @@ def _build_tab5_layout() -> html.Div:
 def _build_tab6_layout() -> html.Div:
     return html.Div(
         [
+            _tab_header(
+                "Learning Progress — Are Agents Getting Better?",
+                "The KEY judging metric: does training improve agent performance? "
+                "Gold vertical lines = prompt evolution events (when heuristics were added to agent prompts). "
+                "Watch the RED rolling win rate trend upward after each evolution event. "
+                "Stats strip shows early vs late episode comparison — positive delta = learning occurred.",
+            ),
             html.Div(
-                "Reward Curves + Evolution Events",
+                "Reward Curves + Prompt Evolution Events (gold lines)",
                 style={"color": TEXT_MUTED, "fontSize": "11px", "marginBottom": "6px"},
             ),
             dcc.Graph(id="t6-reward-chart", style={"height": "280px"}),
             html.Div(
-                "Win Rate Curves (10-episode rolling)",
+                "Win Rate (10-episode rolling average) — positive slope = improvement",
                 style={"color": TEXT_MUTED, "fontSize": "11px", "margin": "12px 0 6px"},
             ),
             dcc.Graph(id="t6-winrate-chart", style={"height": "200px"}),
@@ -223,38 +282,45 @@ def _build_tab6_layout() -> html.Div:
 
 
 def _load_rewards_csv() -> Optional[pd.DataFrame]:
-    try:
-        csv_path = Path("rewards_log.csv")
-        if not csv_path.exists() or csv_path.stat().st_size == 0:
+    import time
+    csv_path = Path("rewards_log.csv")
+    for attempt in range(3):
+        try:
+            if not csv_path.exists() or csv_path.stat().st_size == 0:
+                return None
+            frame = pd.read_csv(csv_path)
+            if "episode" in frame.columns:
+                frame["episode"] = pd.to_numeric(frame["episode"], errors="coerce")
+                frame = frame.dropna(subset=["episode"])
+                if not frame.empty:
+                    frame["episode"] = frame["episode"].astype(int)
+            for numeric_col in (
+                "red_total",
+                "blue_total",
+                "red_exfil",
+                "red_stealth",
+                "red_memory",
+                "red_complexity",
+                "red_abort_penalty",
+                "red_honeypot_penalty",
+                "blue_detection",
+                "blue_speed",
+                "blue_fp_penalty",
+                "blue_honeypot_rate",
+                "blue_graph_reconstruction",
+                "oversight_red_adj",
+                "oversight_blue_adj",
+            ):
+                if numeric_col in frame.columns:
+                    frame[numeric_col] = pd.to_numeric(frame[numeric_col], errors="coerce")
+            return frame if not frame.empty else None
+        except (OSError, pd.errors.ParserError):
+            # File may be locked by the training loop — brief wait then retry
+            if attempt < 2:
+                time.sleep(0.05)
+        except Exception:
             return None
-        frame = pd.read_csv(csv_path)
-        if "episode" in frame.columns:
-            frame["episode"] = pd.to_numeric(frame["episode"], errors="coerce")
-            frame = frame.dropna(subset=["episode"])
-            if not frame.empty:
-                frame["episode"] = frame["episode"].astype(int)
-        for numeric_col in (
-            "red_total",
-            "blue_total",
-            "red_exfil",
-            "red_stealth",
-            "red_memory",
-            "red_complexity",
-            "red_abort_penalty",
-            "red_honeypot_penalty",
-            "blue_detection",
-            "blue_speed",
-            "blue_fp_penalty",
-            "blue_honeypot_rate",
-            "blue_graph_reconstruction",
-            "oversight_red_adj",
-            "oversight_blue_adj",
-        ):
-            if numeric_col in frame.columns:
-                frame[numeric_col] = pd.to_numeric(frame[numeric_col], errors="coerce")
-        return frame if not frame.empty else None
-    except Exception:
-        return None
+    return None
 
 
 def _load_training_events() -> list[dict]:
@@ -381,52 +447,53 @@ def _get_graph_positions():
 def create_live_layout() -> html.Div:
     return html.Div(
         [
+            # ── Top header bar ───────────────────────────────────────────
             html.Div(
                 [
-                    html.Span(
-                        "CIPHER",
-                        style={
-                            "color": RED_COLOR,
-                            "fontWeight": "700",
-                            "fontSize": "18px",
-                            "letterSpacing": "4px",
-                        },
+                    html.Div(
+                        [
+                            html.Span("CIPHER", style={
+                                "color": RED_COLOR, "fontWeight": "700",
+                                "fontSize": "18px", "letterSpacing": "4px",
+                            }),
+                            html.Span(" LIVE TRAINING", id="live-indicator",
+                                      style={"color": GREEN_COLOR, "fontSize": "11px",
+                                             "marginLeft": "6px"}),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
                     ),
-                    html.Span(
-                        " - LIVE",
-                        id="live-indicator",
-                        style={"color": GREEN_COLOR, "fontSize": "11px"},
+                    html.Div(
+                        "RED team (4 AI agents) infiltrates a 50-node network to steal a classified file. "
+                        "BLUE team (4 AI agents) defends. Oversight AI judges both.",
+                        style={"color": TEXT_MUTED, "fontSize": "10px", "maxWidth": "400px"},
                     ),
-                    html.Span(
-                        id="header-episode",
-                        style={"color": TEXT_SECONDARY, "fontSize": "12px"},
-                    ),
+                    html.Span(id="header-episode",
+                              style={"color": TEXT_SECONDARY, "fontSize": "12px"}),
                     html.Span(id="header-status", style={"fontSize": "12px"}),
-                    html.Span(id="header-red-avg", style={"color": RED_COLOR, "fontSize": "12px"}),
-                    html.Span(
-                        id="header-blue-avg",
-                        style={"color": BLUE_COLOR, "fontSize": "12px"},
-                    ),
-                    html.Span(id="header-uptime", style={"color": TEXT_MUTED, "fontSize": "11px"}),
+                    html.Span(id="header-red-avg",
+                              style={"color": RED_COLOR, "fontSize": "12px"}),
+                    html.Span(id="header-blue-avg",
+                              style={"color": BLUE_COLOR, "fontSize": "12px"}),
+                    html.Span(id="header-uptime",
+                              style={"color": TEXT_MUTED, "fontSize": "11px"}),
                 ],
                 style={
-                    "display": "flex",
-                    "gap": "20px",
-                    "alignItems": "center",
-                    "padding": "10px 20px",
-                    "background": "#080808",
+                    "display": "flex", "gap": "20px", "alignItems": "center",
+                    "padding": "10px 20px", "background": "#080808",
                     "borderBottom": f"1px solid {BORDER_COLOR}",
+                    "flexWrap": "wrap",
                 },
             ),
+            # ── Tabs ─────────────────────────────────────────────────────
             dcc.Tabs(
                 id="main-tabs",
                 value="tab-rewards",
                 children=[
-                    dcc.Tab(label="Reward Curves", value="tab-rewards"),
+                    dcc.Tab(label="Rewards", value="tab-rewards"),
                     dcc.Tab(label="Dead Drops", value="tab-drops"),
-                    dcc.Tab(label="Deception Map", value="tab-deception"),
-                    dcc.Tab(label="Oversight Feed", value="tab-oversight"),
-                    dcc.Tab(label="Difficulty Curve", value="tab-difficulty"),
+                    dcc.Tab(label="Network Map", value="tab-deception"),
+                    dcc.Tab(label="Oversight", value="tab-oversight"),
+                    dcc.Tab(label="Difficulty", value="tab-difficulty"),
                     dcc.Tab(label="Learning Curve", value="tab-evolution"),
                 ],
                 style={"fontFamily": "monospace", "fontSize": "12px"},
@@ -434,6 +501,10 @@ def create_live_layout() -> html.Div:
             ),
             html.Div(
                 id="tab-content",
+                # Pre-render all tabs on load (non-active ones hidden).
+                # This guarantees all component IDs exist in the DOM from
+                # the first render, preventing 'Callback error' on interval fire.
+                children=render_tab("tab-rewards"),
                 style={"padding": "16px", "background": DARK_BG, "minHeight": "600px"},
             ),
             dcc.Interval(
@@ -452,19 +523,27 @@ def create_live_layout() -> html.Div:
 
 
 def render_tab(tab):
-    if tab == "tab-rewards":
-        return _build_tab1_layout()
-    if tab == "tab-drops":
-        return _build_tab2_layout()
-    if tab == "tab-deception":
-        return _build_tab3_layout()
-    if tab == "tab-oversight":
-        return _build_tab4_layout()
-    if tab == "tab-difficulty":
-        return _build_tab5_layout()
-    if tab == "tab-evolution":
-        return _build_tab6_layout()
-    return html.Div("Unknown tab")
+    """Render ALL tab layouts but only show the active one.
+
+    This is the critical fix for 'Callback error updating t2-table' etc.:
+    Dash fires interval callbacks for ALL registered outputs regardless of
+    which tab is visible. If a tab's components don't exist in the DOM,
+    Dash raises a callback error. By always rendering all tabs (hidden via
+    display:none), all IDs are always present.
+    """
+    tabs_cfg = [
+        ("tab-rewards",    _build_tab1_layout),
+        ("tab-drops",      _build_tab2_layout),
+        ("tab-deception",  _build_tab3_layout),
+        ("tab-oversight",  _build_tab4_layout),
+        ("tab-difficulty", _build_tab5_layout),
+        ("tab-evolution",  _build_tab6_layout),
+    ]
+    children = []
+    for tab_id, builder in tabs_cfg:
+        style = {} if tab == tab_id else {"display": "none"}
+        children.append(html.Div(builder(), style=style, id=f"tab-wrapper-{tab_id}"))
+    return html.Div(children)
 
 
 def update_header(_n):
@@ -646,7 +725,7 @@ def update_tab2(_n, filter_val):
 
     total = len(drops)
     tampered = sum(1 for drop in drops if drop.get("integrity") == "tampered")
-    avg_tokens = np.mean([drop.get("tokens", 0) for drop in drops]) if drops else 0
+    avg_tokens = np.mean([drop.get("tokens") or 0 for drop in drops]) if drops else 0
     stats = html.Div(
         [
             _stat("Total drops", str(total)),
@@ -1209,6 +1288,9 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
         Input("main-tabs", "value"),
     )
     def _tab_content(tab):
+        """Always render ALL tabs; show only the active one. This ensures
+        all component IDs (t1-main-chart, t2-table, etc.) are always present
+        in the DOM so interval callbacks never hit missing-ID errors."""
         return render_tab(tab)
 
     @target_app.callback(
@@ -1219,6 +1301,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t1-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
+        prevent_initial_call=True,
     )
     def _tab1(n):
         return update_tab1(n)
@@ -1232,6 +1315,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Input("interval-component", "n_intervals"),
             Input("t2-filter", "value"),
         ],
+        prevent_initial_call=True,
     )
     def _tab2(n, filter_val):
         return update_tab2(n, filter_val)
@@ -1243,6 +1327,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t3-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
+        prevent_initial_call=True,
     )
     def _tab3(n):
         return update_tab3(n)
@@ -1254,6 +1339,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t4-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
+        prevent_initial_call=True,
     )
     def _tab4(n):
         return update_tab4(n)
@@ -1265,6 +1351,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t5-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
+        prevent_initial_call=True,
     )
     def _tab5(n):
         return update_tab5(n)
@@ -1276,6 +1363,7 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t6-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
+        prevent_initial_call=True,
     )
     def _tab6(n):
         return update_tab6(n)

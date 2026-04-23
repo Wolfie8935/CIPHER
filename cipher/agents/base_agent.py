@@ -199,17 +199,22 @@ class BaseAgent(ABC):
         """
         Decide on and return an action based on the current observation.
 
-        Phase 3: checks LLM_MODE. If 'live', uses LLM. If 'stub', uses
-        random fallback via _stub_act().
+        Mode routing:
+          stub   → _stub_act()  (random/heuristic, no API calls)
+          live   → _act_live()  (NVIDIA NIM for all 8 agents)
+          hybrid → _act_lora()  for RED Planner specialist
+                   _act_live()  for all other 7 agents (NVIDIA NIM)
 
         Returns:
             An Action object representing the agent's decision.
         """
-        from cipher.utils.llm_mode import is_live_mode
+        from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
 
         self.step_count += 1
 
-        if is_live_mode():
+        if is_hybrid_mode() and self._is_hybrid_specialist():
+            action = self._act_lora()
+        elif is_live_mode():
             action = self._act_live()
         else:
             action = self._stub_act()
@@ -217,12 +222,18 @@ class BaseAgent(ABC):
         self.action_history.append(action)
         return action
 
+    def _is_hybrid_specialist(self) -> bool:
+        """
+        Returns True if this agent is the fine-tuned specialist in hybrid mode.
+        Currently: RED Planner only (trained with GRPO on CIPHER episodes).
+        """
+        return self.team == "red" and self.role == "planner"
+
     def _act_live(self) -> Action:
         """
-        LLM-backed action selection. Constructs prompt, calls LLM, parses response.
-
-        This is the core Phase 3 logic. Subclasses can override for
-        role-specific pre/post processing but most won't need to.
+        LLM-backed action selection via NVIDIA NIM API.
+        Constructs prompt, calls LLM, parses response.
+        Used by all 8 agents in live mode; used by 7 non-specialist agents in hybrid mode.
         """
         from cipher.utils.llm_client import get_llm_client
 
@@ -235,12 +246,54 @@ class BaseAgent(ABC):
             max_tokens=512,
             temperature=0.7,
             expect_json=True,
+            team=self.team,
         )
 
         action = self._parse_action_from_response(response_text)
         self._last_reasoning = action.reasoning
 
-        # Update prompt history with this exchange
+        self._update_prompt_history(
+            user_content=self._observation_to_prompt_text(),
+            assistant_content=response_text,
+        )
+
+        return action
+
+    def _act_lora(self) -> Action:
+        """
+        Fine-tuned LoRA specialist inference for RED Planner in hybrid mode.
+
+        Loads the trained Llama-3.2-1B LoRA adapter (cipher-red-planner) on
+        first call, then reuses for all subsequent steps — no re-loading overhead.
+        Falls back to _act_live() (NVIDIA NIM) on any loading error.
+        """
+        import os
+
+        adapter_path = os.getenv(
+            "RED_PLANNER_LORA_PATH",
+            os.path.join("red trained", "cipher-red-planner"),
+        )
+
+        try:
+            from cipher.utils.lora_client import LoRAClient
+            messages = self._build_messages()
+            client = LoRAClient()
+            response_text = client.complete(
+                messages=messages,
+                adapter_path=adapter_path,
+                max_new_tokens=256,
+                temperature=0.7,
+            )
+            logger.info(f"[LoRA] RED Planner response: {response_text[:80]}...")
+        except Exception as exc:
+            logger.warning(
+                f"[LoRA] RED Planner LoRA failed ({exc}). Falling back to NVIDIA NIM."
+            )
+            return self._act_live()
+
+        action = self._parse_action_from_response(response_text)
+        self._last_reasoning = action.reasoning
+
         self._update_prompt_history(
             user_content=self._observation_to_prompt_text(),
             assistant_content=response_text,

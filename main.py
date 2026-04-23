@@ -1,39 +1,31 @@
 #!/usr/bin/env python3
 """
-CIPHER — Adversarial Multi-Agent Reinforcement Learning Environment
-Phase 3: LLM Integration — Give the Agents Real Brains
-
-Run this file to verify the system:
-  python main.py                  # Single demo episode (stub mode)
-  python main.py --episodes 3    # Run 3 episodes
-  python main.py --no-trace       # Disable trace saving
-  python main.py --live           # Enable LLM mode (requires valid API key)
-
-Pass condition:
-- No import errors
-- No crashes
-- Prints a 10-step episode trace with 8 agents
-- At least one dead drop is written
-- RED and BLUE reward components are printed
-- In live mode: agent reasoning is displayed
-- Oversight signal reports (may fire or not)
+CIPHER — Adversarial Multi-Agent RL Environment
+================================================
+RED team (4 AI agents, including trained LoRA specialist) infiltrates a
+50-node enterprise network to steal a classified file.
+BLUE team (4 AI agents) defends using honeypots, traps, and forensics.
+An Oversight Auditor judges both teams after every episode.
 
 Usage:
-  python main.py                  # Single demo episode
-  python main.py --episodes 3    # Run 3 episodes
-  python main.py --no-trace       # Disable trace saving
-  python main.py --live           # Enable live LLM mode
+  python main.py                          # 1 episode, stub mode
+  python main.py --episodes 5            # 5-episode competition
+  python main.py --steps 20              # longer episodes
+  python main.py --live                  # all agents use NVIDIA NIM
+  python main.py --hybrid                # RED Planner uses trained LoRA
+  python main.py --train                 # training loop (10 episodes)
+  python main.py --debug                 # show all agent debug logs
 """
 from __future__ import annotations
 
 import argparse
-import io
+import logging
 import os
 import sys
 from datetime import datetime
 from time import perf_counter
 
-# Force UTF-8 on Windows
+# ── Force UTF-8 on Windows ──────────────────────────────────────
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     if hasattr(sys.stdout, "reconfigure"):
@@ -41,152 +33,452 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# ── Suppress debug/info logs unless --debug passed ──────────────
+# This must happen before any cipher imports to take effect
+_DEBUG_MODE = "--debug" in sys.argv
+if not _DEBUG_MODE:
+    logging.disable(logging.INFO)
+
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
+from rich import box
+
+console = Console(force_terminal=True)
+
+# ── Zone labels ──────────────────────────────────────────────────
+ZONE_NAMES = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical (HVT)"}
+ZONE_COLORS = {0: "dim white", 1: "cyan", 2: "yellow", 3: "bold red"}
+
+
+def _suspicion_bar(level: float, width: int = 30) -> str:
+    """Render a suspicion level as a colored ASCII bar."""
+    filled = int(level * width)
+    bar = "█" * filled + "░" * (width - filled)
+    if level < 0.4:
+        color = "green"
+    elif level < 0.7:
+        color = "yellow"
+    else:
+        color = "red"
+    return f"[{color}]{bar}[/{color}] {level:.0%}"
+
+
+def _determine_outcome(terminal_reason: str) -> tuple[str, str, str]:
+    """
+    Returns (winner, style, message) based on actual terminal reason.
+
+    RED wins ONLY on successful exfiltration.
+    BLUE wins on detection or max_steps (RED failed to exfil).
+    DRAW on RED abort (voluntary withdrawal).
+    """
+    if terminal_reason in ("exfil_success", "exfiltration_complete", "exfil_complete"):
+        return "RED", "bold red", "RED TEAM WINS — Classified file successfully exfiltrated!"
+    elif terminal_reason == "detected":
+        return "BLUE", "bold blue", "BLUE TEAM WINS — RED agent detected and neutralized!"
+    elif terminal_reason == "aborted":
+        return "DRAW", "bold yellow", "TACTICAL WITHDRAWAL — RED aborted due to rising suspicion."
+    else:  # max_steps or unknown
+        return "BLUE", "bold blue", "BLUE TEAM WINS — RED failed to complete mission in time!"
+
+
+def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
+                               difficulty: float, max_steps: int) -> None:
+    """Print the episode battle header."""
+    if mode == "hybrid":
+        red_label = "RED TEAM (Trained LoRA + 3 agents)"
+        mode_badge = "[bold red]HYBRID[/bold red] — RED Planner uses fine-tuned Llama-3.2-1B"
+    elif mode == "live":
+        red_label = "RED TEAM (4 × NVIDIA NIM agents)"
+        mode_badge = "[bold green]LIVE[/bold green] — All 8 agents use real LLM inference"
+    else:
+        red_label = "RED TEAM (4 agents, stub policy)"
+        mode_badge = "[bold dim]STUB[/bold dim] — Fast random/heuristic policies"
+
+    ep_label = f"Episode {episode_num}"
+    if total_episodes > 1:
+        ep_label += f" / {total_episodes}"
+
+    header = (
+        f"[bold white]{'═' * 58}[/bold white]\n"
+        f"  [bold cyan]C I P H E R[/bold cyan]  —  [bold white]{ep_label}[/bold white]\n"
+        f"  [bold red]{'🔴 ' + red_label:<35}[/bold red]  vs  [bold blue]🔵 BLUE TEAM (4 agents)[/bold blue]\n"
+        f"  Mode: {mode_badge}\n"
+        f"  Network: [cyan]50 nodes[/cyan] | Zones: [cyan]4[/cyan] | "
+        f"Difficulty: [yellow]{difficulty:.2f}[/yellow] | "
+        f"Max steps: [cyan]{max_steps}[/cyan]\n"
+        f"[bold white]{'═' * 58}[/bold white]"
+    )
+    console.print(header)
+    console.print()
+    console.print(
+        "  [bold red]OBJECTIVE[/bold red]: RED must traverse Zones 0→1→2→3 and "
+        "exfiltrate the classified file\n"
+        "  [bold blue]OBJECTIVE[/bold blue]: BLUE must detect, trap, and neutralize the intrusion\n"
+    )
+
+
+def _zone_badge(zone: int) -> str:
+    icons = {0: "[dim white]◌ PERIMETER[/dim white]", 1: "[cyan]◉ GENERAL[/cyan]",
+             2: "[yellow]◈ SENSITIVE[/yellow]", 3: "[bold red]◆ CRITICAL/HVT[/bold red]"}
+    return icons.get(zone, f"Zone {zone}")
+
+
+def _mini_bar(val: float, width: int = 20) -> str:
+    filled = int(val * width)
+    if val < 0.4:
+        col = "green"
+    elif val < 0.7:
+        col = "yellow"
+    else:
+        col = "red"
+    return f"[{col}]{'█' * filled}{'░' * (width - filled)}[/{col}] {val:.0%}"
+
+
+def _print_live_step(step: int, max_steps: int, red_actions: list,
+                     blue_actions: list, state: Any, elapsed_s: float) -> None:
+    """Print a compact, informative per-step line during live/hybrid episodes."""
+    from cipher.agents.base_agent import ActionType  # local import for safety
+
+    # Red planner's primary action
+    red_info = "[dim]waiting…[/dim]"
+    for a in red_actions:
+        if a and a.agent_id.startswith("red_planner"):
+            atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+            node = f" → n{a.target_node}" if a.target_node is not None else ""
+            file_ = f" [{a.target_file[:18]}]" if a.target_file else ""
+            red_info = f"[red]{atype}{node}{file_}[/red]"
+            break
+
+    # Blue dominant action
+    blue_counts: dict[str, int] = {}
+    for a in blue_actions:
+        if a:
+            k = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+            blue_counts[k] = blue_counts.get(k, 0) + 1
+    blue_info = " ".join(f"[blue]{k}×{v}[/blue]" for k, v in blue_counts.items()) or "[dim]—[/dim]"
+
+    # Current zone
+    zone = getattr(state, "red_current_zone", None)
+    if zone is None:
+        try:
+            zone_raw = state.graph.nodes[state.red_current_node].get("zone")
+            zone = zone_raw.value if hasattr(zone_raw, "value") else int(zone_raw)
+        except Exception:
+            zone = 0
+
+    suspicion = float(getattr(state, "red_suspicion_score", 0.0))
+    detection = float(getattr(state, "blue_detection_confidence", 0.0))
+    exfil_count = len(getattr(state, "red_exfiltrated_files", []))
+
+    console.print(
+        f"  [bold white]Step {step:02d}/{max_steps}[/bold white]  "
+        f"[dim]{elapsed_s:4.1f}s[/dim]  "
+        f"Zone {_zone_badge(zone)}  "
+        f"RED: {red_info}  │  "
+        f"BLUE: {blue_info}  │  "
+        f"Susp [red]{suspicion:.0%}[/red]  "
+        f"Det [blue]{detection:.0%}[/blue]"
+        + (f"  [bold green]✓ {exfil_count} file(s) exfil'd[/bold green]" if exfil_count else "")
+    )
+
+
+def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") -> None:
+    """
+    Print a structured narrative of the episode from both team perspectives.
+    In live/hybrid mode also prints a full per-agent breakdown table.
+    """
+    state = result.get("state")
+    if state is None:
+        return
+
+    terminal_reason = str(getattr(state, "terminal_reason", None) or "max_steps")
+    steps_run = int(getattr(state, "step", 0))
+    path_history = list(getattr(state, "red_path_history", []))
+    exfiltrated = list(getattr(state, "red_exfiltrated_files", []))
+    detection_conf = float(getattr(state, "blue_detection_confidence", 0.0))
+    suspicion = float(getattr(state, "red_suspicion_score", 0.0))
+    graph = getattr(state, "graph", None)
+    episode_log = list(getattr(state, "episode_log", []))
+    red_reward = result.get("red_reward")
+    blue_reward = result.get("blue_reward")
+    judgment = result.get("judgment")
+    oversight = result.get("oversight")
+    mismatch_count = result.get("action_reason_mismatch_count", 0)
+    oversight_flags = result.get("oversight_flags", [])
+
+    console.print(f"[bold white]  ── BATTLE LOG ──[/bold white]")
+    console.print()
+
+    # Parse key events from episode log
+    key_events: list[str] = []
+    prev_zone = 0
+    _exfil_logged: set[str] = set()
+
+    for entry in episode_log:
+        step = entry.get("step", 0)
+        agent_id = str(entry.get("agent_id", ""))
+        action_type = str(entry.get("action_type", ""))
+        payload = entry.get("payload", {}) or {}
+        res = entry.get("result", {}) or {}
+
+        if action_type == "move" and agent_id.startswith("red_planner"):
+            target = payload.get("target_node")
+            if target is not None and graph is not None:
+                try:
+                    zone_val = graph.nodes[target].get("zone")
+                    if zone_val is not None:
+                        new_zone = zone_val.value if hasattr(zone_val, "value") else int(zone_val)
+                        hostname = graph.nodes[target].get("hostname", f"node_{target}")
+                        zone_name = ZONE_NAMES.get(new_zone, f"Zone {new_zone}")
+                        if new_zone > prev_zone:
+                            key_events.append(
+                                f"  Step {step:02d} | [bold red]RED ADVANCES[/bold red] "
+                                f"Zone {prev_zone}→[bold]{new_zone}[/bold] "
+                                f"([yellow]{zone_name}[/yellow]) via [cyan]{hostname}[/cyan]"
+                            )
+                            prev_zone = new_zone
+                        elif new_zone == 3 and prev_zone == 3:
+                            key_events.append(
+                                f"  Step {step:02d} | [red]RED[/red] moves within "
+                                f"Critical zone via [cyan]{hostname}[/cyan]"
+                            )
+                except Exception:
+                    pass
+
+        elif action_type == "exfiltrate":
+            file_name = payload.get("target_file") or res.get("exfiltrated")
+            if file_name and file_name not in _exfil_logged:
+                _exfil_logged.add(str(file_name))
+                success = res.get("success", False)
+                reason = res.get("reason", "")
+                if success or reason in ("exfil_success", "exfil_complete"):
+                    key_events.append(
+                        f"  Step {step:02d} | [bold red]EXFILTRATION[/bold red] "
+                        f"[green]SUCCESS[/green] — [cyan]{file_name}[/cyan] stolen!"
+                    )
+                else:
+                    key_events.append(
+                        f"  Step {step:02d} | [red]EXFIL attempt[/red] "
+                        f"[yellow]FAILED[/yellow] ({reason})"
+                    )
+
+        elif action_type == "trigger_alert" and agent_id.startswith("blue_"):
+            correct = res.get("correct_alert", False)
+            if correct:
+                key_events.append(
+                    f"  Step {step:02d} | [bold blue]BLUE ALERT[/bold blue] "
+                    f"[green]CORRECT[/green] — RED agent located and flagged!"
+                )
+            else:
+                key_events.append(
+                    f"  Step {step:02d} | [blue]BLUE alert[/blue] "
+                    f"[yellow]false positive[/yellow]"
+                )
+
+        elif action_type == "abort" and agent_id.startswith("red_"):
+            if res.get("reason") == "abort_applied":
+                key_events.append(
+                    f"  Step {step:02d} | [bold yellow]RED ABORT[/bold yellow] "
+                    f"— Mission abandoned"
+                )
+
+        # Trap events
+        elif action_type in ("place_honeypot", "plant_breadcrumb", "trigger_false_escalation"):
+            if agent_id.startswith("blue_"):
+                node = payload.get("target_node", "?")
+                key_events.append(
+                    f"  Step {step:02d} | [blue]BLUE TRAP[/blue] "
+                    f"[cyan]{action_type}[/cyan] planted at node {node}"
+                )
+
+    if key_events:
+        for event in key_events[:25]:
+            console.print(event)
+    else:
+        console.print(f"  [dim]Episode completed in {steps_run} steps — no major events[/dim]")
+
+    console.print()
+
+    # ── Final summary ─────────────────────────────────────────────
+    winner, winner_style, outcome_msg = _determine_outcome(terminal_reason)
+
+    console.print(f"  Red suspicion:    {_suspicion_bar(suspicion)}")
+    console.print(f"  Blue confidence:  {_suspicion_bar(detection_conf)}")
+    console.print()
+
+    if path_history:
+        path_str = " → ".join(str(n) for n in path_history[:12])
+        if len(path_history) > 12:
+            path_str += f" … ({len(path_history)} nodes total)"
+        console.print(f"  RED path: [dim]{path_str}[/dim]")
+
+    if exfiltrated:
+        unique_exfil = list(dict.fromkeys(exfiltrated))  # deduplicate
+        console.print(
+            f"  Exfiltrated: [bold red]{len(unique_exfil)}[/bold red] unique file(s): "
+            f"[cyan]{', '.join(unique_exfil[:3])}[/cyan]"
+        )
+
+    # ── Reward breakdown (live/hybrid only) ──────────────────────
+    if mode in ("live", "hybrid") and red_reward is not None and blue_reward is not None:
+        console.print()
+        console.print("  [bold white]── REWARD BREAKDOWN ──[/bold white]")
+        # RED
+        rr = red_reward
+        console.print(
+            f"  [red]RED[/red]   total=[bold]{rr.total:+.3f}[/bold]  "
+            f"exfil={getattr(rr,'exfil_bonus',0.0):+.3f}  "
+            f"stealth={getattr(rr,'stealth_bonus',0.0):+.3f}  "
+            f"abort_pen={getattr(rr,'abort_penalty',0.0):+.3f}"
+        )
+        # BLUE
+        br = blue_reward
+        console.print(
+            f"  [blue]BLUE[/blue]  total=[bold]{br.total:+.3f}[/bold]  "
+            f"detection={getattr(br,'detection_bonus',0.0):+.3f}  "
+            f"honeypot={getattr(br,'honeypot_rate',0.0):+.3f}  "
+            f"fp_pen={getattr(br,'false_positive_penalty',0.0):+.3f}"
+        )
+        if judgment:
+            verdict = getattr(judgment, "fleet_verdict", "?")
+            vcol = {"red_dominates": "red", "blue_dominates": "blue",
+                    "contested": "yellow", "degenerate": "dim"}.get(verdict, "white")
+            console.print(f"  Oversight verdict: [{vcol}]{verdict}[/{vcol}]")
+
+    # ── Warnings ─────────────────────────────────────────────────
+    if mismatch_count > 0:
+        console.print(
+            f"\n  [dim yellow]⚠ {mismatch_count} action-reason mismatch(es) detected "
+            f"(agents said one thing, did another)[/dim yellow]"
+        )
+    if oversight_flags:
+        console.print(
+            f"  [dim yellow]⚑ {len(oversight_flags)} oversight flag(s) raised[/dim yellow]"
+        )
+
+    console.print()
+    console.print(f"  [{winner_style}]{outcome_msg}[/{winner_style}]")
+    console.print()
+
 
 
 def main() -> None:
-    """Run the CIPHER demo."""
-    parser = argparse.ArgumentParser(description="CIPHER Phase 3 Demo")
-    parser.add_argument(
-        "--episodes", type=int, default=1, help="Number of episodes to run"
+    """Entry point for CIPHER."""
+    parser = argparse.ArgumentParser(
+        description="CIPHER — Adversarial Multi-Agent RL Environment"
     )
-    parser.add_argument(
-        "--steps", type=int, default=10, help="Max steps per episode"
-    )
-    parser.add_argument(
-        "--no-trace",
-        action="store_true",
-        help="Disable episode trace saving (enabled by default for dashboard replay)",
-    )
-    parser.add_argument(
-        "--live", action="store_true",
-        help="Enable live LLM mode (requires valid NVIDIA API key)"
-    )
+    parser.add_argument("--episodes", type=int, default=1,
+                        help="Number of episodes to run (default: 1)")
+    parser.add_argument("--steps", type=int, default=15,
+                        help="Max steps per episode (default: 15)")
+    parser.add_argument("--live", action="store_true",
+                        help="Use NVIDIA NIM for all agents")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="RED Planner uses trained LoRA, others use NIM")
+    parser.add_argument("--train", action="store_true",
+                        help="Run training loop (10 episodes)")
+    parser.add_argument("--train-episodes", type=int, default=10,
+                        help="Number of episodes for --train mode (default: 10)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
+    parser.add_argument("--no-trace", action="store_true",
+                        help="Skip saving episode traces")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Show per-step agent actions (very verbose)")
     args = parser.parse_args()
 
-    # Set LLM_MODE before importing anything that reads it.
-    # Plain `python main.py` is explicitly STUB; `--live` is explicitly LIVE.
-    os.environ["LLM_MODE"] = "live" if args.live else "stub"
+    # Set LLM mode
+    if args.live:
+        os.environ["LLM_MODE"] = "live"
+        mode = "live"
+    elif args.hybrid:
+        os.environ["LLM_MODE"] = "hybrid"
+        mode = "hybrid"
+    else:
+        os.environ.setdefault("LLM_MODE", "stub")
+        mode = "stub"
 
-    console = Console(force_terminal=True)
+    if args.train:
+        from cipher.training.loop import TrainingLoop
+        n = args.train_episodes
+        console.print(
+            f"[bold cyan]CIPHER Training Loop[/bold cyan] — {n} episodes"
+        )
+        TrainingLoop(n_episodes=n).run()
+        return
 
-    # ── Detect LLM mode ──────────────────────────────────────────
-    from cipher.utils.llm_mode import is_live_mode
-    llm_mode = "LIVE (LLM)" if is_live_mode() else "STUB (random)"
-
-    # ── Startup banner ───────────────────────────────────────────
-    banner_text = (
-        "========================================================\n"
-        "  C I P H E R\n"
-        "  Adversarial Multi-Agent RL Environment\n"
-        f"  Phase 3 -- LLM Integration ({llm_mode})\n"
-        "========================================================"
-    )
-    console.print(Panel(banner_text, border_style="bright_cyan", padding=(1, 2)))
-    console.print()
-
-    # ── Verify imports ───────────────────────────────────────────
-    console.print("[bold white]Phase 3 Import Verification[/bold white]")
-    _verify_imports(console)
-    console.print()
-
-    # ── Run episodes ─────────────────────────────────────────────
+    # Import episode runner after setting LLM_MODE
     from cipher.training._episode_runner import run_episode
+    from cipher.environment.scenario import ScenarioGenerator
+    from cipher.utils.config import config
 
-    for ep_num in range(1, args.episodes + 1):
-        ep_started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        t0 = perf_counter()
-        console.print(
-            f"[bold bright_cyan]{'═' * 60}[/bold bright_cyan]"
-        )
-        red_total, blue_total = run_episode(
-            episode_number=ep_num,
-            max_steps=args.steps,
-            verbose=True,
-            save_trace=not args.no_trace,
-        )
-        elapsed_s = perf_counter() - t0
-        winner = "RED" if red_total > blue_total else "BLUE" if blue_total > red_total else "DRAW"
-        winner_style = "red" if winner == "RED" else "blue" if winner == "BLUE" else "yellow"
-        console.print(
-            f"  [dim]Episode {ep_num} started: {ep_started} | duration: {elapsed_s:.2f}s[/dim]"
-        )
-        console.print(
-            f"  [bold]Winner: [{winner_style}]{winner}[/{winner_style}][/bold]"
-        )
-        console.print(
-            f"  [bold]Episode {ep_num} final: "
-            f"[red]RED={red_total:.4f}[/red]  "
-            f"[blue]BLUE={blue_total:.4f}[/blue][/bold]"
-        )
-        console.print()
+    n_episodes = args.episodes
+    max_steps = args.steps          # always set (default 15)
+    runner_verbose = args.verbose   # False by default — main.py owns display
+    save_trace = not args.no_trace
 
-    # ── Final summary ────────────────────────────────────────────
-    console.print(
-        Panel(
-            f"[bold green]✓ Phase 3 pass condition met.[/bold green]\n"
-            f"[dim]All modules imported. Episode executed ({llm_mode}). "
-            f"Rewards computed. No crashes.[/dim]",
-            border_style="green",
-            padding=(1, 2),
+    scenario_gen = ScenarioGenerator()
+    start_time = perf_counter()
+
+    for ep_num in range(1, n_episodes + 1):
+        scenario = scenario_gen.generate(ep_num)
+
+        _print_competition_header(
+            episode_num=ep_num,
+            total_episodes=n_episodes,
+            mode=mode,
+            difficulty=scenario.difficulty,
+            max_steps=max_steps,
         )
-    )
 
+        ep_start = perf_counter()
+        _step_times: list[float] = []
 
-def _verify_imports(console: Console) -> None:
-    """Verify all Phase 1-3 modules can be imported without errors."""
-    modules = [
-        ("cipher.utils.config", "CipherConfig"),
-        ("cipher.utils.logger", "get_logger"),
-        ("cipher.utils.llm_client", "LLMClient"),
-        ("cipher.utils.llm_mode", "is_live_mode"),
-        ("cipher.environment.graph", "generate_enterprise_graph"),
-        ("cipher.environment.state", "EpisodeState"),
-        ("cipher.environment.observation", "generate_red_observation"),
-        ("cipher.environment.scenario", "ScenarioGenerator"),
-        ("cipher.agents.base_agent", "BaseAgent"),
-        ("cipher.agents.red.planner", "RedPlanner"),
-        ("cipher.agents.red.analyst", "RedAnalyst"),
-        ("cipher.agents.red.operative", "RedOperative"),
-        ("cipher.agents.red.exfiltrator", "RedExfiltrator"),
-        ("cipher.agents.blue.surveillance", "BlueSurveillance"),
-        ("cipher.agents.blue.threat_hunter", "BlueThreatHunter"),
-        ("cipher.agents.blue.deception_architect", "BlueDeceptionArchitect"),
-        ("cipher.agents.blue.forensics", "BlueForensics"),
-        ("cipher.memory.dead_drop", "DeadDropVault"),
-        ("cipher.rewards.red_reward", "compute_red_reward"),
-        ("cipher.rewards.blue_reward", "compute_blue_reward"),
-        ("cipher.rewards.oversight_reward", "compute_oversight_signal"),
-        ("cipher.dashboard.app", "CipherDashboard"),
-        ("cipher.training.loop", "TrainingLoop"),
-    ]
-
-    passed = 0
-    failed = 0
-
-    for module_path, symbol in modules:
-        try:
-            mod = __import__(module_path, fromlist=[symbol])
-            getattr(mod, symbol)
-            console.print(f"  [green]✓[/green] {module_path}.{symbol}")
-            passed += 1
-        except Exception as exc:
+        # For live/hybrid: inject a per-step callback so we print progress as it happens
+        step_callback = None
+        if mode in ("live", "hybrid"):
             console.print(
-                f"  [red]✗[/red] {module_path}.{symbol} — {exc}"
+                f"  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n"
             )
-            failed += 1
+            _ep_start_ref = [perf_counter()]  # mutable cell
 
-    console.print(
-        f"\n  [bold]Results: {passed} passed, {failed} failed[/bold]"
-    )
+            def _make_step_callback(ep_start_ref):
+                def _cb(step, max_steps, red_actions, blue_actions, state):
+                    elapsed = perf_counter() - ep_start_ref[0]
+                    _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
+                return _cb
 
-    if failed > 0:
-        console.print(
-            "[bold red]FATAL: Import verification failed. Fix errors above.[/bold red]"
+            step_callback = _make_step_callback(_ep_start_ref)
+
+        result = run_episode(
+            scenario=scenario,
+            graph=scenario.generated_graph,
+            cfg=config,
+            max_steps=max_steps,
+            verbose=runner_verbose,
+            save_trace=save_trace,
+            episode_number=ep_num,
+            step_callback=step_callback,
         )
-        sys.exit(1)
+
+        ep_elapsed = perf_counter() - ep_start
+        if mode in ("live", "hybrid"):
+            console.print(
+                f"\n  [dim]Episode finished in {ep_elapsed:.1f}s "
+                f"({ep_elapsed/max_steps:.1f}s/step avg)[/dim]\n"
+            )
+
+        if isinstance(result, dict):
+            _print_episode_battle(result, ep_num, mode=mode)
+
+    elapsed = perf_counter() - start_time
+    if n_episodes > 1:
+        console.print(
+            f"\n[dim]Completed {n_episodes} episodes in {elapsed:.1f}s "
+            f"({elapsed/n_episodes:.1f}s avg)[/dim]"
+        )
 
 
 if __name__ == "__main__":

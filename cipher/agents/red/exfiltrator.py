@@ -33,10 +33,15 @@ class RedExfiltrator(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.WAIT,
                          reasoning="No observation — waiting.")
 
-        # Priority 1: Exfiltrate if at HVT with target files
+        # Priority 1: Exfiltrate if at HVT with target files (cycle through unattempted)
         node_type_val = obs.current_node_type.value if hasattr(obs.current_node_type, 'value') else str(obs.current_node_type)
         if node_type_val == "high_value_target" and obs.files_at_current_node:
-            target_file = obs.files_at_current_node[0]
+            already_attempted = {
+                a.target_file for a in self.action_history
+                if a.action_type == ActionType.EXFILTRATE and a.target_file
+            }
+            remaining = [f for f in obs.files_at_current_node if f not in already_attempted]
+            target_file = remaining[0] if remaining else obs.files_at_current_node[0]
             return Action(agent_id=self.agent_id, action_type=ActionType.EXFILTRATE,
                          target_file=target_file,
                          reasoning=f"Exfiltrating target file: {target_file}")

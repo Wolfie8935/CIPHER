@@ -1224,10 +1224,10 @@ def make_layout():
             "rowGap": "8px",
         }),
 
-        # Judge definitions panel (Phase 12 requirement)
+        # Quick guide panel (always visible for judges)
         html.Details([
             html.Summary(
-                "Replay Definitions (for judges) — what each signal means",
+                "How to read this dashboard — click to collapse",
                 style={
                     "cursor": "pointer",
                     "fontFamily": "'JetBrains Mono', monospace",
@@ -1238,26 +1238,34 @@ def make_layout():
                 },
             ),
             html.Div([
-                html.Div("🔴 RED Path: the actual operation route RED traversed over time."),
-                html.Div("🔵 BLUE Confidence: BLUE team's detection confidence curve by step."),
-                html.Div("📦 Dead Drop: RED memory artifact written for post-reset continuation."),
-                html.Div("⚡ Trap Event: triggered deception/trap interaction in the episode."),
-                html.Div("✅ Honeypot Trigger: BLUE deception successfully lured RED into a honeypot."),
-                html.Div("Dashed Purple Line: a context reset boundary for RED's memory window."),
-                html.Div("Dashed Yellow Link: false-trail chase away from RED's actual route."),
-                html.Div("Dotted Blue Overlay: Forensics reconstructed RED path from sparse evidence."),
-                html.Div("Complexity Score: operation depth estimate from path breadth, traps, and reset survival."),
-            ], style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(auto-fit, minmax(260px, 1fr))",
-                "gap": "6px 14px",
-                "fontSize": "10px",
-                "fontFamily": "'JetBrains Mono', monospace",
-                "color": C["text_dim"],
-                "marginTop": "8px",
-                "lineHeight": "1.5",
-            }),
-        ], open=False, style={
+                html.Div([
+                    html.Span("CIPHER: ", style={"color": "#ff4444", "fontWeight": "bold"}),
+                    "RED team (4 LLM agents) infiltrates a 50-node enterprise network across 4 security zones "
+                    "to steal a classified file. BLUE team (4 LLM agents) defends with honeypots, traps & forensics. "
+                    "One Oversight Auditor LLM judges both teams after every episode.",
+                ], style={"marginBottom": "8px", "fontSize": "11px",
+                          "color": C["text"], "fontWeight": "500"}),
+                html.Div([
+                    html.Div("🔴 RED Path: the route RED took through the network (Zone 0→1→2→3=HVT)."),
+                    html.Div("🔵 BLUE Confidence: how confident BLUE is that they've detected RED (0-100%)."),
+                    html.Div("📊 Suspicion: RED's exposure level — crosses 0.8 = likely abort."),
+                    html.Div("📦 Dead Drop: encrypted message RED leaves at a node so they can resume after memory reset."),
+                    html.Div("⚡ Trap Event: a deception trap fired (honeypot lured RED, or RED planted false trail)."),
+                    html.Div("Complexity Multiplier: 1.0 + 0.05×nodes + 0.10×zones — rewards ambitious multi-zone operations."),
+                    html.Div("Fleet Verdict: Oversight AI judgment — red_dominates / blue_dominates / contested / degenerate."),
+                    html.Div("Dotted Blue: Forensics agent's reconstructed guess of RED's path (partial info)."),
+                ], style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(260px, 1fr))",
+                    "gap": "4px 14px",
+                    "fontSize": "10px",
+                    "fontFamily": "'JetBrains Mono', monospace",
+                    "color": C["text_dim"],
+                    "marginTop": "8px",
+                    "lineHeight": "1.6",
+                }),
+            ]),
+        ], open=True, style={
             "padding": "8px 14px",
             "borderBottom": f"1px solid {C['border']}",
             "background": C["bg"],
@@ -1578,33 +1586,61 @@ def make_layout():
 def make_unified_layout():
     return html.Div(
         [
+            # ── Top navigation bar with CIPHER description ───────────────
             html.Div(
                 [
-                    html.Span("Dashboard Mode", style={"fontSize": "11px", "color": "#94a3b8"}),
-                    dcc.RadioItems(
-                        id="dashboard-mode",
-                        options=[
-                            {"label": "Replay", "value": "replay"},
-                            {"label": "Live Training", "value": "live"},
+                    html.Div(
+                        [
+                            html.Span("CIPHER", style={
+                                "color": "#ff4444", "fontWeight": "800",
+                                "fontSize": "16px", "letterSpacing": "3px",
+                            }),
+                            html.Span(" — Adversarial Multi-Agent RL", style={
+                                "color": "#64748b", "fontSize": "11px", "marginLeft": "8px",
+                            }),
                         ],
-                        value="replay",
-                        inline=True,
-                        labelStyle={"marginRight": "16px", "fontSize": "12px"},
-                        inputStyle={"marginRight": "6px"},
-                        style={"color": "#e2e8f0", "fontFamily": "'JetBrains Mono', monospace"},
+                        style={"display": "flex", "alignItems": "center"},
+                    ),
+                    html.Div(
+                        "🔴 RED team infiltrates a 50-node enterprise network to steal a classified file  "
+                        "|  🔵 BLUE team defends with traps & forensics  "
+                        "|  ⚖ Oversight AI judges both teams",
+                        style={
+                            "color": "#475569", "fontSize": "10px",
+                            "flex": "1", "textAlign": "center",
+                        },
+                    ),
+                    html.Div(
+                        [
+                            html.Span("View: ", style={"fontSize": "11px", "color": "#94a3b8",
+                                                        "marginRight": "4px"}),
+                            dcc.RadioItems(
+                                id="dashboard-mode",
+                                options=[
+                                    {"label": " Episode Replay", "value": "replay"},
+                                    {"label": " Live Training", "value": "live"},
+                                ],
+                                value="replay",
+                                inline=True,
+                                labelStyle={"marginRight": "16px", "fontSize": "12px"},
+                                inputStyle={"marginRight": "4px"},
+                                style={"color": "#e2e8f0",
+                                       "fontFamily": "'JetBrains Mono', monospace"},
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
                     ),
                 ],
                 style={
-                    "display": "flex",
-                    "alignItems": "center",
-                    "gap": "12px",
-                    "padding": "8px 14px",
-                    "background": "#020617",
-                    "borderBottom": "1px solid #1e293b",
+                    "display": "flex", "alignItems": "center", "justifyContent": "space-between",
+                    "gap": "12px", "padding": "8px 16px",
+                    "background": "#020617", "borderBottom": "1px solid #1e293b",
+                    "flexWrap": "wrap",
                 },
             ),
             html.Div(id="replay-container", children=make_layout()),
-            html.Div(id="live-container", children=create_live_layout(), style={"display": "none"}),
+            html.Div(id="live-container", children=create_live_layout(),
+                     style={"display": "none"}),
         ]
     )
 
@@ -2104,6 +2140,8 @@ class CipherDashboard:
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
+
+register_live_callbacks(app)
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8050)

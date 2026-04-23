@@ -107,6 +107,7 @@ class RedObservation:
     # ── Phase 2: tactical awareness ──────────────────────────────
     zone_boundary_ahead: bool = False
     steps_since_last_move: int = 0
+    adjacent_node_zones: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -238,6 +239,12 @@ def generate_red_observation(
         break
     steps_since = max(0, state.step - last_move_step) if last_move_step > 0 else 0
 
+    # Adjacent node zones (used by stub planner for zone-targeted movement)
+    adj_zones: list[int] = []
+    for n in successors:
+        z = graph.nodes[n].get("zone")
+        adj_zones.append(z.value if hasattr(z, "value") else (z if z is not None else 0))
+
     return RedObservation(
         current_node=current,
         current_node_type=masked_type,
@@ -259,6 +266,7 @@ def generate_red_observation(
         credentials_held=list(state.red_credentials_acquired),
         zone_boundary_ahead=zone_boundary,
         steps_since_last_move=steps_since,
+        adjacent_node_zones=adj_zones,
     )
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,6 +121,8 @@ def run_episode(
     debug_trace_state: bool = False,
     scripted_red_actions: dict[int, list[Action]] | None = None,
     scripted_blue_actions: dict[int, list[Action]] | None = None,
+    stream_progress: bool = False,
+    step_callback=None,
 ) -> Any:
     """
     Run a single CIPHER episode.
@@ -292,10 +295,32 @@ def run_episode(
         if scripted_red is not None:
             red_action_stream: list[Action] = scripted_red
         else:
-            red_action_stream = []
-            for agent in red_agents:
-                agent.observe(red_obs)
-                red_action_stream.append(agent.act())
+            # ── Parallel: all 4 RED agents call LLM simultaneously ──────
+            from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
+            _parallel = is_live_mode() or is_hybrid_mode()
+            if _parallel:
+                # observe first (sequential, lightweight)
+                for agent in red_agents:
+                    agent.observe(red_obs)
+                red_action_stream = [None] * len(red_agents)
+                with ThreadPoolExecutor(max_workers=len(red_agents)) as pool:
+                    futures = {pool.submit(a.act): i for i, a in enumerate(red_agents)}
+                    for fut in as_completed(futures):
+                        idx = futures[fut]
+                        try:
+                            red_action_stream[idx] = fut.result()
+                        except Exception as exc:
+                            logger.error(f"RED agent {red_agents[idx].agent_id} error: {exc}")
+                            red_action_stream[idx] = Action(
+                                agent_id=red_agents[idx].agent_id,
+                                action_type=ActionType.WAIT,
+                                reasoning="Agent exception — safe fallback.",
+                            )
+            else:
+                red_action_stream = []
+                for agent in red_agents:
+                    agent.observe(red_obs)
+                    red_action_stream.append(agent.act())
 
         for action in red_action_stream:
             action.step = step
@@ -367,11 +392,33 @@ def run_episode(
         if scripted_blue is not None:
             blue_action_stream: list[Action] = scripted_blue
         else:
-            blue_action_stream = []
-            for agent in blue_agents:
-                setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
-                agent.observe(blue_obs)
-                blue_action_stream.append(agent.act())
+            # ── Parallel: all 4 BLUE agents call LLM simultaneously ─────
+            from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
+            _parallel_blue = is_live_mode() or is_hybrid_mode()
+            if _parallel_blue:
+                for agent in blue_agents:
+                    setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
+                    agent.observe(blue_obs)
+                blue_action_stream = [None] * len(blue_agents)
+                with ThreadPoolExecutor(max_workers=len(blue_agents)) as pool:
+                    futures = {pool.submit(a.act): i for i, a in enumerate(blue_agents)}
+                    for fut in as_completed(futures):
+                        idx = futures[fut]
+                        try:
+                            blue_action_stream[idx] = fut.result()
+                        except Exception as exc:
+                            logger.error(f"BLUE agent {blue_agents[idx].agent_id} error: {exc}")
+                            blue_action_stream[idx] = Action(
+                                agent_id=blue_agents[idx].agent_id,
+                                action_type=ActionType.STAND_DOWN,
+                                reasoning="Agent exception — safe fallback.",
+                            )
+            else:
+                blue_action_stream = []
+                for agent in blue_agents:
+                    setattr(agent, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
+                    agent.observe(blue_obs)
+                    blue_action_stream.append(agent.act())
 
         for action in blue_action_stream:
             action.step = step
@@ -486,6 +533,17 @@ def run_episode(
                 },
             )
 
+        # Compact per-step progress line for live/hybrid mode
+        if stream_progress:
+            _print_step_progress(step, max_steps, red_actions, blue_actions, state)
+
+        # External step callback (used by main.py for live ticker)
+        if step_callback is not None:
+            try:
+                step_callback(step, max_steps, red_actions, blue_actions, state)
+            except Exception:
+                pass
+
         # Check max steps
         if step >= max_steps:
             state.is_terminal = True
@@ -554,7 +612,7 @@ def run_episode(
 
     # ── Save trace ───────────────────────────────────────────────
     if save_trace:
-        _save_episode_trace(state, episode_number)
+        _save_episode_trace(state, episode_number, verbose=verbose)
 
     result_payload = {
         "red_reward": red_reward,
@@ -606,10 +664,11 @@ def _process_red_action(
             )
 
             # Check if moved to honeypot
+            # NOTE: suspicion spike (+0.4) is applied by the trap system in traps.py
+            # Do NOT double-apply it here — only set the flag and boost detection.
             node_type = state.graph.nodes[action.target_node].get("node_type")
             if node_type == NodeType.HONEYPOT:
                 state.blue_honeypots_triggered.append(action.target_node)
-                state.update_suspicion(0.4)  # Major suspicion spike
                 state.blue_detection_confidence = min(
                     1.0, state.blue_detection_confidence + 0.3
                 )
@@ -873,6 +932,57 @@ def _apply_trap_effect(effect: Any, state: Any, blue_obs: Any) -> None:
     )
 
 
+def _print_step_progress(
+    step: int,
+    max_steps: int,
+    red_actions: list,
+    blue_actions: list,
+    state: Any,
+) -> None:
+    """Print a compact single-line RL-style step update for live/hybrid mode."""
+    susp = float(getattr(state, "red_suspicion_score", 0.0))
+    det = float(getattr(state, "blue_detection_confidence", 0.0))
+    terminal = getattr(state, "terminal_reason", None)
+
+    # Build progress bar
+    filled = int(susp * 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    if susp < 0.4:
+        bar_str = f"[green]{bar}[/green]"
+    elif susp < 0.7:
+        bar_str = f"[yellow]{bar}[/yellow]"
+    else:
+        bar_str = f"[red]{bar}[/red]"
+
+    # Summarise RED action (planner action only)
+    red_summary = "—"
+    for a in red_actions:
+        if a.agent_id.startswith("red_planner"):
+            at = str(a.action_type.value).upper()[:12]
+            target = f"→{a.target_node}" if a.target_node is not None else (f"→{a.target_file[:10]}" if a.target_file else "")
+            red_summary = f"{at}{target}"
+            break
+
+    # Summarise BLUE (first non-stand-down)
+    blue_summary = "STAND_DOWN"
+    for a in blue_actions:
+        if a.action_type.value != "stand_down":
+            at = str(a.action_type.value).upper()[:12]
+            target = f"→{a.target_node}" if a.target_node is not None else ""
+            blue_summary = f"{at}{target}"
+            break
+
+    terminal_tag = f"  [bold yellow]{terminal.upper()}[/bold yellow]" if terminal else ""
+    console.print(
+        f"  [dim]Step {step:02d}/{max_steps:02d}[/dim] │ "
+        f"[red]RED:[/red] {red_summary:<18} │ "
+        f"[blue]BLUE:[/blue] {blue_summary:<18} │ "
+        f"susp:{bar_str} {susp:.0%} │ "
+        f"det:[cyan]{det:.0%}[/cyan]"
+        + terminal_tag
+    )
+
+
 def _print_trap_event(step: int, effect: Any) -> None:
     """Print a trap trigger event to the console."""
     team = effect.triggered_by_team
@@ -991,54 +1101,73 @@ def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any, judgment: 
         f"{blue_reward.honeypot_trigger_rate:.2f}",
     )
     table.add_row(
-        "Penalties",
-        f"{red_reward.abort_penalty + red_reward.honeypot_penalty:.2f}",
+        "Abort Penalty / Graph Recon",
+        f"{red_reward.abort_penalty:.2f}",
         f"{blue_reward.operation_graph_reconstruction_score:.2f}",
     )
-    table.add_row("", "", "")
+    table.add_row(
+        "Oversight Adjustment",
+        f"{oversight.total_red_adjustment:+.2f}",
+        f"{oversight.total_blue_adjustment:+.2f}",
+    )
     table.add_row(
         "[bold]TOTAL[/bold]",
-        f"[bold red]{red_reward.total:.4f}[/bold red]",
-        f"[bold blue]{blue_reward.total:.4f}[/bold blue]",
+        f"[bold]{red_reward.total:+.4f}[/bold]",
+        f"[bold]{blue_reward.total:+.4f}[/bold]",
     )
 
     console.print(table)
 
-    # Oversight
-    if oversight.flags_fired:
-        console.print(
-            f"  [yellow]! OVERSIGHT: {', '.join(oversight.flags_fired)}[/yellow]"
-        )
-    else:
-        console.print("  [dim]OVERSIGHT: no flags fired[/dim]")
-
     if judgment is not None:
+        verdict = judgment.episode_verdict
+        verdict_style = {
+            "red_dominates": "bold red",
+            "blue_dominates": "bold blue",
+            "contested": "bold yellow",
+            "degenerate": "dim",
+        }.get(verdict, "white")
         console.print(
-            "  "
-            f"[bold]FLEET VERDICT:[/bold] {judgment.episode_verdict} | "
-            f"RED bonus: {judgment.fleet_bonus_red:+.2f} | "
-            f"BLUE bonus: {judgment.fleet_bonus_blue:+.2f}"
+            f"\n  Fleet Verdict: [{verdict_style}]{verdict.upper()}[/{verdict_style}]"
+            f"  (bonus RED={judgment.fleet_bonus_red:+.2f}"
+            f"  BLUE={judgment.fleet_bonus_blue:+.2f})"
         )
-
+        if judgment.judgment_text:
+            console.print(f"  [dim]{judgment.judgment_text[:120]}[/dim]")
     console.print()
 
 
-def _save_episode_trace(state: EpisodeState, episode_number: int) -> None:
-    """Save the complete episode trace to a JSON file."""
-    traces_dir = config.episode_traces_dir
-    traces_dir.mkdir(parents=True, exist_ok=True)
+def _save_episode_trace(
+    state: "EpisodeState",
+    episode_number: int,
+    verbose: bool = True,
+) -> None:
+    """Save the full episode trace to a JSON file."""
+    import json
+    from pathlib import Path
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    filepath = traces_dir / f"episode_{episode_number:03d}_{ts}.json"
-    trace_data = state.to_dict()
+    traces_dir = Path("episode_traces")
+    traces_dir.mkdir(exist_ok=True)
+    trace_path = traces_dir / f"episode_{episode_number:04d}.json"
 
-    # Persist runtime mode so replay UI shows the true mode for this trace.
-    from cipher.utils.llm_mode import is_live_mode
-    trace_data["llm_mode"] = "live" if is_live_mode() else "stub"
-    trace_data["llm_backend"] = os.getenv("LLM_BACKEND", "")
+    try:
+        from networkx.readwrite import json_graph
+        graph_data = json_graph.node_link_data(state.graph)
+    except Exception:
+        graph_data = {}
 
-    filepath.write_text(
-        json.dumps(trace_data, indent=2, default=str, ensure_ascii=True),
-        encoding="utf-8",
-    )
-    console.print(f"  [dim]Episode trace saved → {filepath}[/dim]")
+    trace = {
+        "episode_number": episode_number,
+        "episode_id": state.episode_id,
+        "steps": state.step,
+        "terminal_reason": state.terminal_reason,
+        "red_exfiltrated_files": list(state.red_exfiltrated_files),
+        "red_suspicion_score": state.red_suspicion_score,
+        "blue_detection_confidence": state.blue_detection_confidence,
+        "episode_log": state.episode_log,
+    }
+
+    with open(trace_path, "w", encoding="utf-8") as f:
+        json.dump(trace, f, indent=2, default=str)
+
+    if verbose:
+        console.print(f"  [dim]Trace saved: {trace_path}[/dim]")

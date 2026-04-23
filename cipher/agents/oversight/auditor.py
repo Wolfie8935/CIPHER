@@ -109,10 +109,10 @@ Bonus assignment rules:
 - -0.1 to -0.2: team looped, did nothing, or acted randomly with no coherent goal
 
 episode_verdict meanings:
-- "red_dominates": RED exfiltrated ≥2 files and maintained low detection
-- "blue_dominates": BLUE confirmed detection early AND honeypots triggered
-- "contested": neither team clearly dominated
-- "degenerate": one or both teams took <3 meaningful actions (aborted early, looped, etc.)
+- "red_dominates": RED exfiltrated at least 1 file successfully (terminal_reason=exfil_success or exfiltration_complete)
+- "blue_dominates": RED was detected (terminal_reason=detected) OR RED aborted with BLUE detection_confidence >0.5
+- "contested": RED aborted early but BLUE detection confidence was low (<0.5), or neither team achieved their objective
+- "degenerate": both teams scored near zero with no meaningful engagement (all rewards within ±0.05 of zero)
 """
 
     def __init__(self, config: CipherConfig):
@@ -147,9 +147,12 @@ episode_verdict meanings:
         Never raises — returns a default judgment on any failure.
         """
         try:
-            prompt = self._build_prompt(state, red_action_log, blue_action_log)
-            raw = self._call_llm(prompt)
-            judgment = self._parse_response(raw)
+            if not is_live_mode():
+                judgment = self._stub_judgment(state)
+            else:
+                prompt = self._build_prompt(state, red_action_log, blue_action_log)
+                raw = self._call_llm(prompt)
+                judgment = self._parse_response(raw)
             logger.info(
                 "OversightAuditor verdict=%s bonus_red=%+.2f bonus_blue=%+.2f",
                 judgment.episode_verdict,
@@ -274,23 +277,6 @@ episode_verdict meanings:
         )
 
     def _call_llm(self, prompt: str) -> str:
-        # Keep stub mode offline and deterministic for tests.
-        if not is_live_mode():
-            return json.dumps(
-                {
-                    "fleet_bonus_red": 0.0,
-                    "fleet_bonus_blue": 0.0,
-                    "judgment_text": (
-                        "Episode completed with baseline strategic activity. "
-                        "Neither side established clear dominance."
-                    ),
-                    "notable_red_action": "baseline movement pattern observed",
-                    "notable_blue_action": "baseline anomaly monitoring maintained",
-                    "quality_score_red": 0.5,
-                    "quality_score_blue": 0.5,
-                    "episode_verdict": "contested",
-                }
-            )
 
         client = get_llm_client()
         messages = [
@@ -324,15 +310,119 @@ episode_verdict meanings:
             raw_llm_response=raw,
         )
 
+    def _stub_judgment(self, state: EpisodeState) -> AuditorJudgment:
+        """Generate a varied, realistic judgment from actual episode state without LLM."""
+        # If state is not a real EpisodeState, return safe defaults (test compatibility)
+        if not hasattr(state, "red_exfiltrated_files"):
+            return self._default_judgment()
+
+        exfiltrated = list(getattr(state, "red_exfiltrated_files", []))
+        terminal_reason = getattr(state, "terminal_reason", None) or "max_steps"
+        detection_confidence = float(getattr(state, "blue_detection_confidence", 0.0))
+        steps = int(getattr(state, "step", 0))
+
+        # Determine verdict and bonuses based on episode outcome
+        if exfiltrated:
+            verdict = "red_dominates"
+            bonus_red = 0.10
+            bonus_blue = -0.05
+            judgment_text = (
+                f"RED successfully exfiltrated {len(exfiltrated)} file(s). "
+                "RED demonstrated effective lateral movement and exfiltration. "
+                "BLUE failed to detect the intrusion in time."
+            )
+            notable_red = f"Successfully exfiltrated: {exfiltrated[0]}"
+            notable_blue = "Failed to intercept RED before exfiltration completed"
+            q_red = 0.8
+            q_blue = 0.3
+        elif terminal_reason == "detected":
+            verdict = "blue_dominates"
+            bonus_red = -0.05
+            bonus_blue = 0.10
+            judgment_text = (
+                "BLUE successfully detected and neutralized RED's intrusion attempt. "
+                f"Detection confidence reached {detection_confidence:.0%}. "
+                "Effective defensive posture prevented data exfiltration."
+            )
+            notable_red = "Intrusion detected before reaching high-value target"
+            notable_blue = f"Confirmed RED detection at confidence {detection_confidence:.0%}"
+            q_red = 0.3
+            q_blue = 0.8
+        elif terminal_reason == "aborted" and detection_confidence > 0.5:
+            verdict = "blue_dominates"
+            bonus_red = 0.0
+            bonus_blue = 0.05
+            judgment_text = (
+                f"RED aborted mission under pressure as detection confidence rose to {detection_confidence:.0%}. "
+                "BLUE's monitoring created sufficient threat to force RED's withdrawal. "
+                "Tactical BLUE victory through deterrence."
+            )
+            notable_red = "Voluntary abort triggered by rising detection pressure"
+            notable_blue = f"Detection pressure at {detection_confidence:.0%} forced RED abort"
+            q_red = 0.4
+            q_blue = 0.65
+        elif terminal_reason == "aborted" and detection_confidence <= 0.5:
+            verdict = "contested"
+            bonus_red = 0.0
+            bonus_blue = 0.0
+            judgment_text = (
+                "RED aborted voluntarily with low detection pressure — neither side achieved decisive outcome. "
+                f"BLUE detection confidence was only {detection_confidence:.0%}. "
+                "Inconclusive episode with no clear strategic winner."
+            )
+            notable_red = "Tactical abort with low detection risk — conservative play"
+            notable_blue = f"Low detection confidence ({detection_confidence:.0%}) — missed opportunity"
+            q_red = 0.5
+            q_blue = 0.45
+        elif steps < 4:
+            verdict = "degenerate"
+            bonus_red = -0.05
+            bonus_blue = -0.05
+            judgment_text = (
+                f"Episode ended after only {steps} steps — insufficient engagement for meaningful evaluation. "
+                "Both teams showed minimal strategic activity. "
+                "Degenerate episode with no learning signal."
+            )
+            notable_red = "Minimal steps taken — no meaningful offensive action"
+            notable_blue = "Minimal defensive engagement in degenerate episode"
+            q_red = 0.1
+            q_blue = 0.1
+        else:
+            verdict = "contested"
+            bonus_red = 0.0
+            bonus_blue = 0.0
+            judgment_text = (
+                f"Episode ran {steps} steps to {terminal_reason} with no decisive outcome. "
+                "Neither team established clear dominance. "
+                "Balanced engagement with marginal strategic differentiation."
+            )
+            notable_red = "Lateral movement attempted without reaching high-value target"
+            notable_blue = "Maintained surveillance without confirming RED location"
+            q_red = 0.5
+            q_blue = 0.5
+
+        return AuditorJudgment(
+            fleet_bonus_red=float(max(-0.2, min(0.2, bonus_red))),
+            fleet_bonus_blue=float(max(-0.2, min(0.2, bonus_blue))),
+            judgment_text=judgment_text,
+            notable_red_action=notable_red,
+            notable_blue_action=notable_blue,
+            quality_score_red=float(max(0.0, min(1.0, q_red))),
+            quality_score_blue=float(max(0.0, min(1.0, q_blue))),
+            episode_verdict=verdict,
+            raw_llm_response="stub",
+        )
+
     def _default_judgment(self) -> AuditorJudgment:
+        """Return a safe, neutral default judgment used on failure or missing state."""
         return AuditorJudgment(
             fleet_bonus_red=0.0,
             fleet_bonus_blue=0.0,
-            judgment_text="Auditor unavailable — default judgment applied.",
-            notable_red_action="unavailable",
-            notable_blue_action="unavailable",
+            judgment_text="Default judgment: insufficient state data for evaluation.",
+            notable_red_action="none",
+            notable_blue_action="none",
             quality_score_red=0.5,
             quality_score_blue=0.5,
             episode_verdict="contested",
-            raw_llm_response="",
+            raw_llm_response="default",
         )
