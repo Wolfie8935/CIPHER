@@ -78,7 +78,7 @@ class EpisodeState:
     is_terminal: bool = False
     terminal_reason: str | None = None
     # Valid terminal reasons:
-    # "exfiltration_complete" | "detected" | "max_steps" | "aborted"
+    # "exfiltration_complete" | "detected" | "max_steps" | "aborted" | "stalled"
 
     # ── Phase 2: anomaly and zone tracking ───────────────────────
     anomaly_log: list[dict[str, Any]] = field(default_factory=list)
@@ -94,6 +94,12 @@ class EpisodeState:
     blue_discovered_drop_paths: list[str] = field(default_factory=list)
     traps_triggered_log: list[dict[str, Any]] = field(default_factory=list)
     last_honeypot_trigger_step: int | None = None
+
+    # ── A4: stall detection ────────────────────────────────────
+    # Tracks how many consecutive steps RED has stayed on the same node.
+    # Reset to 0 on any move; incremented each step RED stays in place.
+    red_steps_on_current_node: int = 0
+    red_last_stall_update_step: int = -1
 
     # ── Action logging ───────────────────────────────────────────
 
@@ -202,6 +208,10 @@ class EpisodeState:
         Updates movement history, visited nodes, zone tracking, and
         per-zone suspicion.
 
+        Also maintains red_steps_on_current_node for stall detection (A4):
+        - Resets to 0 when RED actually moves to a new node.
+        - Increments by 1 when to_node == from_node (RED stays in place).
+
         Args:
             from_node: Source node ID.
             to_node: Destination node ID.
@@ -216,6 +226,12 @@ class EpisodeState:
             "suspicion_cost": round(suspicion_cost, 4),
         }
         self.red_movement_history.append(record)
+
+        # A4: stall counter — reset on move, increment on stay
+        if to_node != from_node:
+            self.red_steps_on_current_node = 0
+        else:
+            self.red_steps_on_current_node += 1
 
         # Update current node and visited list
         self.red_current_node = to_node
@@ -323,8 +339,64 @@ class EpisodeState:
     # ── Terminal check ───────────────────────────────────────────
 
     def is_done(self) -> bool:
-        """Return True if the episode is in a terminal state."""
-        return self.is_terminal
+        """Return True if the episode is in a terminal state.
+
+        A4 early-termination rules (applied in priority order):
+        1. Already terminal — return immediately.
+        2. Detected: red_suspicion_score >= 0.95 AND blue_detection_confidence >= 0.70.
+        3. Stalled: RED on the same node for >= 4 consecutive steps.
+        """
+        if self.is_terminal:
+            return True
+
+        self._update_stall_counter_for_step()
+
+        # A4 — Early termination: detected
+        if (
+            self.red_suspicion_score >= 0.95
+            and self.blue_detection_confidence >= 0.70
+        ):
+            self.is_terminal = True
+            self.terminal_reason = "detected"
+            logger.info(
+                "Episode terminated early: detected "
+                f"(suspicion={self.red_suspicion_score:.3f}, "
+                f"confidence={self.blue_detection_confidence:.3f})"
+            )
+            return True
+
+        # A4 — Early termination: stalled
+        if self.red_steps_on_current_node >= 4:
+            self.is_terminal = True
+            self.terminal_reason = "stalled"
+            logger.info(
+                "Episode terminated early: stalled "
+                f"(node={self.red_current_node}, "
+                f"steps_on_node={self.red_steps_on_current_node})"
+            )
+            return True
+
+        return False
+
+    def _update_stall_counter_for_step(self) -> None:
+        """
+        Ensure stall counter advances once per environment step.
+
+        record_movement() updates the counter when movement actions occur.
+        This method handles non-movement steps (WAIT/read/etc.), which would
+        otherwise never increment and make stall termination unreachable.
+        """
+        if self.red_last_stall_update_step == self.step:
+            return
+
+        moved_this_step = any(
+            int(m.get("step", -1)) == self.step
+            for m in self.red_movement_history
+        )
+        if not moved_this_step:
+            self.red_steps_on_current_node += 1
+
+        self.red_last_stall_update_step = self.step
 
     # ── Serialization ────────────────────────────────────────────
 
@@ -390,6 +462,8 @@ class EpisodeState:
             "traps_triggered_log": self.traps_triggered_log,
             "red_path_history": self.red_path_history,
             "last_honeypot_trigger_step": self.last_honeypot_trigger_step,
+            "red_steps_on_current_node": self.red_steps_on_current_node,
+            "red_last_stall_update_step": self.red_last_stall_update_step,
             "trap_registry": self.trap_registry.to_dict() if self.trap_registry and hasattr(self.trap_registry, 'to_dict') else None,
         }
 
@@ -454,4 +528,6 @@ class EpisodeState:
             blue_discovered_drop_paths=data.get("blue_discovered_drop_paths", []),
             traps_triggered_log=data.get("traps_triggered_log", []),
             last_honeypot_trigger_step=data.get("last_honeypot_trigger_step"),
+            red_steps_on_current_node=data.get("red_steps_on_current_node", 0),
+            red_last_stall_update_step=data.get("red_last_stall_update_step", -1),
         )

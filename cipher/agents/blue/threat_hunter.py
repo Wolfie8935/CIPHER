@@ -24,6 +24,9 @@ class BlueThreatHunter(BaseAgent):
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "blue", "threat_hunter", config)
         self._hypothesis_nodes: list[int] = []
+        self._candidate_alert_node: int | None = None
+        self._candidate_streak: int = 0
+        self._last_alert_step: int = -999
 
     def observe(self, observation: BlueObservation) -> None:
         self._current_observation = observation
@@ -31,6 +34,21 @@ class BlueThreatHunter(BaseAgent):
             self._hypothesis_nodes = list(set(
                 a.node_id for a in observation.anomaly_feed if a.node_id is not None
             ))
+            # Candidate node is the highest-severity anomaly; require persistence before alerting.
+            strongest = max(
+                (a for a in observation.anomaly_feed if a.node_id is not None),
+                key=lambda a: a.severity,
+                default=None,
+            )
+            if strongest is not None:
+                if strongest.node_id == self._candidate_alert_node:
+                    self._candidate_streak += 1
+                else:
+                    self._candidate_alert_node = strongest.node_id
+                    self._candidate_streak = 1
+        else:
+            self._candidate_alert_node = None
+            self._candidate_streak = 0
 
     def _stub_act(self) -> Action:
         obs = self._current_observation
@@ -38,13 +56,23 @@ class BlueThreatHunter(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                          reasoning="No observation — standing down.")
 
-        # High confidence? Trigger alert
-        if obs.current_detection_confidence > 0.7 and self._hypothesis_nodes:
-            target = self._hypothesis_nodes[0]
+        # High confidence + repeated strongest hypothesis + cooldown => trigger alert.
+        # This reduces false positives from one-step noisy spikes or stale hypotheses.
+        can_alert_now = (obs.step - self._last_alert_step) >= 3
+        if (
+            obs.current_detection_confidence > 0.78
+            and self._candidate_alert_node is not None
+            and self._candidate_streak >= 2
+            and can_alert_now
+        ):
+            target = self._candidate_alert_node
+            self._last_alert_step = obs.step
             return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
                          target_node=target,
-                         reasoning=f"High confidence ({obs.current_detection_confidence:.2f}) — "
-                                  f"alerting on node {target}.")
+                         reasoning=(
+                             f"Confirmed hypothesis at node {target} over {self._candidate_streak} steps "
+                             f"with confidence {obs.current_detection_confidence:.2f} — issuing alert."
+                         ))
 
         # Investigate hypothesis nodes
         if self._hypothesis_nodes:
@@ -73,6 +101,9 @@ class BlueThreatHunter(BaseAgent):
     def reset(self) -> None:
         super().reset()
         self._hypothesis_nodes = []
+        self._candidate_alert_node = None
+        self._candidate_streak = 0
+        self._last_alert_step = -999
 
     def _build_messages(self) -> list[dict[str, str]]:
         messages = super()._build_messages()

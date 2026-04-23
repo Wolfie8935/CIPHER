@@ -10,7 +10,7 @@ An Oversight Auditor judges both teams after every episode.
 Usage:
   python main.py                          # 1 episode, stub mode
   python main.py --episodes 5            # 5-episode competition
-  python main.py --steps 20              # longer episodes
+  python main.py --steps 30              # longer episodes
   python main.py --live                  # all agents use NVIDIA NIM
   python main.py --hybrid                # RED Planner uses trained LoRA
   python main.py --train                 # training loop (10 episodes)
@@ -492,8 +492,8 @@ def main() -> None:
     )
     parser.add_argument("--episodes", type=int, default=1,
                         help="Number of episodes to run (default: 1)")
-    parser.add_argument("--steps", type=int, default=15,
-                        help="Max steps per episode (default: 15)")
+    parser.add_argument("--steps", type=int, default=30,
+                        help="Max steps per episode (default: 30)")
     parser.add_argument("--live", action="store_true",
                         help="Use NVIDIA NIM for all agents")
     parser.add_argument("--hybrid", action="store_true",
@@ -550,7 +550,7 @@ def main() -> None:
     from cipher.utils.config import config
 
     n_episodes = args.episodes
-    max_steps = args.steps          # always set (default 15)
+    max_steps = args.steps          # always set (default 30)
     runner_verbose = args.verbose   # False by default — main.py owns display
     save_trace = not args.no_trace
 

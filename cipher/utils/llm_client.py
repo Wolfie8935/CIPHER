@@ -20,6 +20,7 @@ from typing import Any
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 from cipher.utils.config import config
 from cipher.utils.logger import get_logger
+from cipher.utils.llm_mode import get_llm_mode
 
 logger = get_logger(__name__)
 
@@ -44,7 +45,14 @@ class LLMClient:
     REQUEST_TIMEOUT = 12.0   # 12s per call max; fallback on timeout
 
     def __init__(self) -> None:
-        self.backend = config.llm_backend
+        configured_backend = str(config.llm_backend).strip().lower()
+        runtime_mode = get_llm_mode()
+        if runtime_mode == "hybrid":
+            self.backend = "hybrid"
+        elif configured_backend in {"nvidia", "local", "hybrid"}:
+            self.backend = configured_backend
+        else:
+            self.backend = "nvidia"
 
         if self.backend == "nvidia":
             _extra_headers = {}
@@ -96,7 +104,12 @@ class LLMClient:
                 "Valid options: nvidia | local | hybrid"
             )
 
-        logger.debug(f"LLMClient initialized: backend={self.backend}")
+        logger.info(f"LLMClient initialized: backend={self.backend}")
+        if self.backend == "hybrid":
+            logger.info(
+                f"Hybrid routing: {_LOCAL_KEYS_IN_HYBRID} -> LOCAL ({config.local_model_url}), "
+                "all other agents -> NVIDIA/OpenRouter."
+            )
 
     def complete(
         self,
