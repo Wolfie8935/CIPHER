@@ -222,12 +222,22 @@ class BaseAgent(ABC):
         self.action_history.append(action)
         return action
 
+    # Maps (team, role) → (env_var, default_adapter_path) for LoRA specialists
+    _LORA_PATH_MAP: dict = {
+        ("red", "planner"):        ("RED_PLANNER_LORA_PATH",       os.path.join("red trained", "cipher-red-planner-v2")),
+        ("red", "analyst"):        ("RED_ANALYST_LORA_PATH",        os.path.join("red trained", "cipher-red-analyst-v1")),
+        ("blue", "surveillance"):  ("BLUE_SURVEILLANCE_LORA_PATH",  os.path.join("blue trained", "cipher-blue-surveillance-v1")),
+        ("blue", "threat_hunter"): ("BLUE_THREAT_HUNTER_LORA_PATH", os.path.join("blue trained", "cipher-blue-threat-hunter-v1")),
+    }
+
     def _is_hybrid_specialist(self) -> bool:
-        """
-        Returns True if this agent is the fine-tuned specialist in hybrid mode.
-        Currently: RED Planner only (trained with GRPO on CIPHER episodes).
-        """
-        return self.team == "red" and self.role == "planner"
+        """Returns True if this agent has a trained LoRA available in hybrid mode."""
+        key = (self.team, self.role)
+        if key not in self._LORA_PATH_MAP:
+            return False
+        env_key, default_path = self._LORA_PATH_MAP[key]
+        adapter_path = os.getenv(env_key, default_path)
+        return bool(os.path.exists(adapter_path))
 
     def _act_live(self) -> Action:
         """
@@ -261,18 +271,14 @@ class BaseAgent(ABC):
 
     def _act_lora(self) -> Action:
         """
-        Fine-tuned LoRA specialist inference for RED Planner in hybrid mode.
+        Fine-tuned LoRA specialist inference for hybrid mode.
 
-        Loads the trained Llama-3.2-1B LoRA adapter (cipher-red-planner) on
-        first call, then reuses for all subsequent steps — no re-loading overhead.
-        Falls back to _act_live() via NVIDIA NIM (not localhost) on any loading error.
+        Resolves the correct adapter path for whichever specialist this agent is,
+        then calls the LoRA client. Falls back to NVIDIA NIM on any loading error.
         """
-        import os
-
-        adapter_path = os.getenv(
-            "RED_PLANNER_LORA_PATH",
-            os.path.join("red trained", "cipher-red-planner"),
-        )
+        key = (self.team, self.role)
+        env_key, default_path = self._LORA_PATH_MAP.get(key, ("", ""))
+        adapter_path = os.getenv(env_key, default_path) if env_key else default_path
 
         try:
             from cipher.utils.lora_client import LoRAClient
@@ -284,10 +290,10 @@ class BaseAgent(ABC):
                 max_new_tokens=256,
                 temperature=0.7,
             )
-            logger.info(f"[LoRA] RED Planner response: {response_text[:80]}...")
+            logger.info(f"[LoRA] {self.agent_id} response: {response_text[:80]}...")
         except Exception as exc:
             logger.warning(
-                f"[LoRA] RED Planner LoRA failed ({exc}). Falling back to NVIDIA NIM."
+                f"[LoRA] {self.agent_id} LoRA failed ({exc}). Falling back to NVIDIA NIM."
             )
             return self._act_live_nvidia_direct()
 
@@ -398,50 +404,107 @@ class BaseAgent(ABC):
 
     def _red_observation_to_text(self, obs: RedObservation) -> str:
         """Format a RedObservation into prompt text."""
+        node_type_val = (
+            obs.current_node_type.value
+            if hasattr(obs.current_node_type, "value")
+            else str(obs.current_node_type)
+        )
+        at_hvt = node_type_val == "high_value_target"
+        honeypot_nodes = set(getattr(obs, 'honeypot_nodes_nearby', []) or [])
+        breadcrumb_nodes = set(getattr(obs, 'breadcrumb_nodes_nearby', []) or [])
+        danger_nodes = honeypot_nodes | breadcrumb_nodes
+
         lines = [
             f"STEP {obs.step} — RED TEAM OBSERVATION",
-            f"Current node: {obs.current_node}",
-            f"Current zone: {obs.current_zone}",
-            f"Current hostname: {obs.current_hostname}",
-            f"Current node type: {obs.current_node_type.value if hasattr(obs.current_node_type, 'value') else obs.current_node_type}",
-            f"Suspicion level: {obs.estimated_suspicion:.2f}",
-            f"Privilege level: {obs.current_privilege_level}",
+            f"Current node: {obs.current_node} | Zone: {obs.current_zone} | Type: {node_type_val}",
+            f"Hostname: {obs.current_hostname}",
+            f"Suspicion level: {obs.estimated_suspicion:.2f} | Privilege: {obs.current_privilege_level}",
+            # Critical status line — LLM must see this immediately
+            f"EXFILTRATE ALLOWED: {'YES — you are at the HIGH_VALUE_TARGET. Use EXFILTRATE now.' if at_hvt else 'NO — current node is not the HVT. Keep moving deeper.'}",
         ]
 
         # Services
         if obs.current_services:
             lines.append(f"Services: {', '.join(obs.current_services)}")
 
-        # Adjacent nodes (parallel lists: ids, types, hostnames, protocols)
+        # Adjacent nodes with danger flags and HVT callouts
         if obs.adjacent_nodes:
-            lines.append("Adjacent nodes:")
+            lines.append("Adjacent nodes (AVOID any marked DANGER):")
+            hvt_adjacent = []
             for i, node_id in enumerate(obs.adjacent_nodes):
-                node_type = obs.adjacent_node_types[i].value if i < len(obs.adjacent_node_types) and hasattr(obs.adjacent_node_types[i], 'value') else "unknown"
+                node_type = (
+                    obs.adjacent_node_types[i].value
+                    if i < len(obs.adjacent_node_types) and hasattr(obs.adjacent_node_types[i], 'value')
+                    else "unknown"
+                )
                 hostname = obs.adjacent_hostnames[i] if i < len(obs.adjacent_hostnames) else "unknown"
                 protocol = obs.edge_protocols[i] if i < len(obs.edge_protocols) else "ssh"
                 req_priv = obs.required_privileges[i] if i < len(obs.required_privileges) else 0
+                flags = ""
+                if node_id in honeypot_nodes:
+                    flags += " ⚠HONEYPOT-AVOID"
+                elif node_id in breadcrumb_nodes:
+                    flags += " ⚠BREADCRUMB-AVOID"
+                if node_type == "high_value_target":
+                    flags += " ★HVT-TARGET-MOVE-HERE"
+                    hvt_adjacent.append(node_id)
                 lines.append(
-                    f"  node {node_id} (type={node_type}, hostname={hostname}, "
-                    f"protocol={protocol}, req_priv={req_priv})"
+                    f"  node {node_id} (type={node_type}, host={hostname}, "
+                    f"proto={protocol}, req_priv={req_priv}){flags}"
+                )
+            # Urgent HVT callout
+            if hvt_adjacent and not at_hvt:
+                lines.append(
+                    f"★★★ HVT IS ADJACENT: MOVE TO NODE {hvt_adjacent[0]} NOW — this is the exfiltration target! ★★★"
                 )
 
-        # Zone boundary warning
+        # Danger zone summary (honeypots + breadcrumbs)
+        if danger_nodes:
+            hp_list = sorted(honeypot_nodes)
+            bc_list = sorted(breadcrumb_nodes)
+            if hp_list:
+                lines.append(f"⚠ HONEYPOT NODES (NEVER ENTER): {hp_list}")
+            if bc_list:
+                lines.append(f"⚠ BREADCRUMB TRAPS (AVOID PATH): {bc_list}")
+
+        # Zone boundary
         if obs.zone_boundary_ahead:
-            lines.append("⚠ ZONE BOUNDARY AHEAD — next zone requires higher privileges")
+            lines.append("→ ZONE BOUNDARY AHEAD — advancing here raises privileges and zone level")
 
         # Files at current node
         if obs.files_at_current_node:
-            lines.append(f"Files here: {', '.join(obs.files_at_current_node)}")
+            if at_hvt:
+                exfil_done = set(getattr(obs, 'exfiltrated_files', []) or [])
+                remaining = [f for f in obs.files_at_current_node if f not in exfil_done]
+                lines.append(f"TARGET FILES HERE: {', '.join(remaining)} — EXFILTRATE THESE")
+                if exfil_done:
+                    lines.append(f"Already exfiltrated: {', '.join(exfil_done)}")
+            else:
+                lines.append(f"Files here: {', '.join(obs.files_at_current_node)} (not target files — skip, keep moving)")
+        elif at_hvt:
+            lines.append("No files here — the HVT may be a different node in Zone 3.")
+
+        # Exfiltrated files summary
+        exfil_done = getattr(obs, 'exfiltrated_files', [])
+        if exfil_done:
+            lines.append(f"Already exfiltrated this episode: {', '.join(exfil_done)}")
+
+        # False escalation detection
+        if getattr(obs, 'detection_spike_this_step', False):
+            lines.append(
+                "⚠ WARNING: BLUE detection confidence spiked suddenly — likely FALSE_ESCALATION trap. "
+                "Do NOT abort on this signal alone. Verify the trend persists for 2+ steps."
+            )
 
         # Dead drops
         if obs.dead_drops_available:
-            lines.append(f"Dead drops available: {len(obs.dead_drops_available)}")
+            lines.append(f"Dead drops available: {len(obs.dead_drops_available)} (read ONLY if context was reset)")
         else:
             lines.append("Dead drops available: NONE")
 
         # Context reset
         if obs.context_reset_this_step:
-            lines.append("*** CONTEXT RESET THIS STEP — You have no memory of prior actions ***")
+            lines.append("*** CONTEXT RESET THIS STEP — READ_DEAD_DROP immediately to recover mission state ***")
 
         # Credentials
         if obs.credentials_held:
@@ -601,21 +664,31 @@ class BaseAgent(ABC):
             target_node = None
 
         if not self._passes_semantic_guardrails(action_type):
+            rejected_action = action_type.value
             logger.warning(
                 f"{self.agent_id}: Semantic guardrail rejected action "
-                f"'{action_type.value}'. Falling back to {fallback_type.value}."
+                f"'{rejected_action}'. Falling back to {fallback_type.value}."
             )
             action_type = fallback_type
             target_node = None
             target_file = None
-            if not reasoning:
-                reasoning = (
-                    "Action violated semantic guardrails for current observation — "
-                    "falling back to safe action."
-                )
+            # Always overwrite reasoning so it matches the ACTUAL action taken
+            reasoning = (
+                f"Guardrail blocked '{rejected_action}' (pre-conditions not met) — "
+                f"falling back to {fallback_type.value}."
+            )
 
         if not self._is_trap_action_allowed(action_type, target_node):
+            rejected_trap = action_type.value
             action_type = fallback_type
+            target_node = None
+            target_file = None
+            # Critical: overwrite reasoning to match action — this is the source of
+            # 'stand_down_with_trap_intent' mismatches in the mismatch detector.
+            reasoning = (
+                f"Trap '{rejected_trap}' not allowed (budget or pre-condition check) — "
+                f"holding position ({fallback_type.value})."
+            )
 
         if self._is_trap_action(action_type):
             self._trap_budget_remaining = max(0, self._trap_budget_remaining - 1)
@@ -642,15 +715,27 @@ class BaseAgent(ABC):
         if action_type == ActionType.ABORT and self.team == "red":
             if self.role != "planner":
                 return False
-            # RED Planner aborts only under Track A gate:
-            # suspicion > 0.80 AND blue_confidence > 0.60.
             if isinstance(obs, RedObservation):
                 blue_conf = float(getattr(obs, "blue_detection_confidence", 0.0))
-                return bool(obs.estimated_suspicion > 0.80 and blue_conf > 0.60)
+                # Standard gate: critical suspicion + strong BLUE confirmation
+                if obs.estimated_suspicion > 0.85 and blue_conf > 0.70:
+                    return True
+                # Early-warning gate: both metrics rising very fast
+                history = getattr(self, '_suspicion_history', [])
+                conf_history = getattr(self, '_blue_conf_history', [])
+                if len(history) >= 3 and len(conf_history) >= 3:
+                    recent_delta = history[-1] - history[-3]
+                    blue_delta = conf_history[-1] - conf_history[-3]
+                    if recent_delta > 0.20 and blue_delta > 0.18 and obs.estimated_suspicion > 0.78:
+                        return True
+                return False
             return False
 
-        # EXFILTRATE is only valid at HVT nodes.
+        # EXFILTRATE is only valid at HVT nodes, and only for planner/exfiltrator roles.
         if action_type == ActionType.EXFILTRATE and isinstance(obs, RedObservation):
+            # Operative and Analyst should never exfiltrate — that's Planner/Exfiltrator's job
+            if self.team == "red" and self.role in ("operative", "analyst"):
+                return False
             node_type_val = (
                 obs.current_node_type.value
                 if hasattr(obs.current_node_type, "value")
@@ -660,7 +745,9 @@ class BaseAgent(ABC):
 
         # BLUE alerts should require strong evidence to reduce false positives.
         if action_type == ActionType.TRIGGER_ALERT and isinstance(obs, BlueObservation):
-            confidence_ok = float(obs.current_detection_confidence) >= 0.70
+            # Lowered from 0.70 → 0.60: at 0.69 BLUE was falling back to stand_down
+            # with old reasoning, creating mismatch logs every episode.
+            confidence_ok = float(obs.current_detection_confidence) >= 0.55
             honeypot_ok = bool(obs.honeypots_triggered_this_step)
             return confidence_ok or honeypot_ok
 
@@ -701,6 +788,10 @@ class BaseAgent(ABC):
             if obs is None or not isinstance(obs, BlueObservation):
                 return False
             observed_nodes = {a.node_id for a in obs.anomaly_feed if a.node_id is not None}
+            if not observed_nodes:
+                # Anomaly feed is empty this step — allow placement while budget remains.
+                # (Empty feed was causing stand_down-with-trap-intent mismatch loop.)
+                return obs.investigation_budget_remaining > 0
             return target_node in observed_nodes
 
         if action_type == ActionType.TAMPER_DEAD_DROP:
@@ -727,6 +818,23 @@ class BaseAgent(ABC):
         max_entries = MAX_PROMPT_HISTORY * 2
         if len(self.prompt_history) > max_entries:
             self.prompt_history = self.prompt_history[-max_entries:]
+
+    def _avoid_recent(self, pool: list[int], lookback: int = 3) -> list[int]:
+        """Return pool with recently-visited nodes removed to prevent cycling.
+
+        Falls back to the full pool if deduplication would leave it empty.
+        For planner callers, use lookback=6 to break 6-node cycles (25→28→29→25…).
+        """
+        recent = {
+            a.target_node for a in self.action_history[-lookback:]
+            if a.action_type == ActionType.MOVE and a.target_node is not None
+        }
+        fresh = [n for n in pool if n not in recent]
+        return fresh if fresh else pool
+
+    def _avoid_recent_long(self, pool: list[int]) -> list[int]:
+        """Extended anti-loop version with 6-step lookback for planner."""
+        return self._avoid_recent(pool, lookback=6)
 
     def reset(self) -> None:
         """

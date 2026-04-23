@@ -97,14 +97,14 @@ def _make_df(
 class TestPromptEvolverInit:
     def test_evolver_initializes(self):
         e = PromptEvolver()
-        assert e.EVOLVE_EVERY_N == 10
+        assert e.EVOLVE_EVERY_N == 5
 
     def test_should_evolve_false_on_non_multiple(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         e = PromptEvolver()
         assert not e.should_evolve(7)
         assert not e.should_evolve(11)
-        assert not e.should_evolve(5)
+        assert not e.should_evolve(8)
 
     def test_should_evolve_true_on_multiple_with_enough_rows(
         self, tmp_path, monkeypatch
@@ -112,22 +112,22 @@ class TestPromptEvolverInit:
         monkeypatch.chdir(tmp_path)
         _make_rewards_csv(tmp_path, n=15)
         e = PromptEvolver()
+        assert e.should_evolve(5)
         assert e.should_evolve(10)
-        assert e.should_evolve(20)
 
     def test_should_not_evolve_with_too_few_rows(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _make_rewards_csv(tmp_path, n=3)
         e = PromptEvolver()
-        # Episode 10 is a multiple, but only 3 rows → should NOT evolve
-        assert not e.should_evolve(10)
+        # Episode 5 is a multiple, but only 3 rows → should NOT evolve
+        assert not e.should_evolve(5)
 
     def test_should_not_evolve_zero_episode(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _make_rewards_csv(tmp_path, n=15)
         e = PromptEvolver()
         # Episode 0 divides evenly, but training doesn't start at 0
-        # The spec says "multiple of EVOLVE_EVERY_N" — 0 % 10 == 0,
+        # The spec says "multiple of EVOLVE_EVERY_N" — 0 % 5 == 0,
         # but should_evolve(0) may be called before any episodes run.
         # We simply confirm it doesn't crash.
         result = e.should_evolve(0)

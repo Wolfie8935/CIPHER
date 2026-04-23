@@ -43,35 +43,40 @@ class BlueForensics(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                          reasoning="No observation — maintaining analysis posture.")
 
-        # Reconstruct path when enough evidence
-        if len(self._operation_graph) >= 3:
+        # High-zone entries are more significant
+        high_zone_entries = [e for e in self._operation_graph if e.get("zone", 0) >= 2]
+
+        # Escalate to TRIGGER_ALERT when graph is rich enough and confidence is elevated
+        if len(self._operation_graph) >= 5 and obs.current_detection_confidence >= 0.45 and high_zone_entries:
+            # Pick the most recent high-zone node as the alert target
+            latest_high = max(high_zone_entries, key=lambda e: (e["zone"], e["step"]))
+            return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
+                         target_node=latest_high["node_id"],
+                         reasoning=(
+                             f"Forensic graph has {len(self._operation_graph)} entries — "
+                             f"RED signature confirmed at zone {latest_high['zone']} node {latest_high['node_id']}. Alerting."
+                         ))
+
+        # Investigate the latest high-zone node if any
+        if high_zone_entries:
+            latest = max(high_zone_entries, key=lambda e: e["step"])
+            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
+                         target_node=latest["node_id"],
+                         reasoning=f"Investigating zone {latest['zone']} node {latest['node_id']} from op graph.")
+
+        # Reconstruct path at most once every 4 steps (avoid infinite loop)
+        last_reconstruct = getattr(self, "_last_reconstruct_step", -99)
+        if len(self._operation_graph) >= 3 and (obs.step - last_reconstruct) >= 4:
+            self._last_reconstruct_step = obs.step
             return Action(agent_id=self.agent_id, action_type=ActionType.RECONSTRUCT_PATH,
-                         reasoning=f"Updating operation graph with "
-                                  f"{len(self._operation_graph)} evidence points.")
+                         reasoning=f"Updating op graph with {len(self._operation_graph)} evidence points.")
 
         # Analyze fresh anomalies
         if obs.anomaly_feed:
             worst = max(obs.anomaly_feed, key=lambda a: a.severity)
             return Action(agent_id=self.agent_id, action_type=ActionType.ANALYZE_ANOMALY,
                          target_node=worst.node_id,
-                         reasoning=f"Deep-analyzing anomaly at node {worst.node_id} "
-                                  f"(severity={worst.severity:.2f}).")
-
-        # Investigate from graph
-        if self._operation_graph:
-            recent = self._operation_graph[-1]
-            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
-                         target_node=recent["node_id"],
-                         reasoning=f"Investigating node {recent['node_id']} "
-                                  f"(suspected at step {recent['step']}).")
-
-        # Trigger alert if high confidence
-        if obs.current_detection_confidence > 0.75 and self._operation_graph:
-            latest = self._operation_graph[-1]
-            return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
-                         target_node=latest["node_id"],
-                         reasoning=f"Forensic reconstruction confidence high — "
-                                  f"alerting on node {latest['node_id']}.")
+                         reasoning=f"Deep-analyzing anomaly at node {worst.node_id} (severity={worst.severity:.2f}).")
 
         return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                      reasoning="Insufficient evidence — collecting more data points.")

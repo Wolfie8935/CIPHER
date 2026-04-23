@@ -3,9 +3,9 @@
   "current_episode": 1,
   "total_episodes": 1,
   "llm_mode": "live",
-  "run_id": "live_20260423_201801",
-  "started_at": "2026-04-23T20:18:01.046207",
-  "last_updated": "2026-04-23T20:20:13.733844",
-  "estimated_cost_usd": 0.0768,
-  "total_steps": 15
+  "run_id": "live_20260424_040634",
+  "started_at": "2026-04-24T04:06:34.895837",
+  "last_updated": "2026-04-24T04:08:36.850610",
+  "estimated_cost_usd": 0.1536,
+  "total_steps": 30
 }

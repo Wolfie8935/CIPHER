@@ -1010,10 +1010,17 @@ def update_tab3(_n):
                 red_node = int(m.group(1))
 
         for zone in range(4):
-            zone_nodes = [
-                n for n in graph.nodes()
-                if int(getattr(graph.nodes[n].get("zone"), "value", graph.nodes[n].get("zone", 0))) == zone
-            ]
+            zone_nodes = []
+            for n in graph.nodes():
+                z_raw = graph.nodes[n].get("zone", 0)
+                z_val = getattr(z_raw, "value", z_raw)
+                try:
+                    z_val = int(z_val) if z_val is not None else 0
+                except (ValueError, TypeError):
+                    z_val = 0
+                if z_val == zone:
+                    zone_nodes.append(n)
+
             if not zone_nodes:
                 continue
             xs = [pos[n][0] for n in zone_nodes]

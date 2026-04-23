@@ -951,3 +951,5 @@
 {"episode": 11, "timestamp": "2026-04-23T20:13:47.268392", "event_type": "dead_drop_written", "team": "red", "trap_type": null, "node": 4, "step": 10, "tokens": 182, "efficiency": 0.0, "integrity": "valid", "detail": "Dead drop written (vault scan)"}
 {"episode": 11, "timestamp": "2026-04-23T20:13:47.268392", "event_type": "abort", "team": "red", "trap_type": null, "node": null, "step": 10, "detail": "Episode aborted by RED"}
 {"episode": 11, "timestamp": "2026-04-23T20:13:47.268392", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 10, "detail": "Episode 11 ended: aborted | RED=-0.660 BLUE=+1.041"}
+{"episode": 1, "timestamp": "2026-04-24T03:52:47.786024", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 1 started (difficulty=0.30)"}
+{"episode": 1, "timestamp": "2026-04-24T03:57:31.437976", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 1 started (difficulty=0.30)"}

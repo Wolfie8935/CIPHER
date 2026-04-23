@@ -116,6 +116,14 @@ class RedObservation:
     # Adjacent node IDs that are known honeypots (masked elsewhere but flagged here)
     honeypot_nodes_nearby: list[int] = field(default_factory=list)
 
+    # ── B.md additions ────────────────────────────────────────────
+    # Files already successfully exfiltrated this episode (Change 5)
+    exfiltrated_files: list[str] = field(default_factory=list)
+    # Adjacent nodes carrying BLUE breadcrumb traps — avoid (Change 6)
+    breadcrumb_nodes_nearby: list[int] = field(default_factory=list)
+    # True when BLUE detection confidence spiked >0.20 without RED action (Change 9)
+    detection_spike_this_step: bool = False
+
 
 @dataclass
 class BlueObservation:
@@ -288,6 +296,23 @@ def generate_red_observation(
     # Sort available_paths by suspicion_delta ascending so LLM sees cheapest first
     available_paths.sort(key=lambda p: p["suspicion_delta"])
 
+    # ── Change 6: breadcrumb_nodes_nearby ─────────────────────────
+    breadcrumb_nodes_nearby: list[int] = []
+    if hasattr(state, 'trap_registry') and state.trap_registry:
+        try:
+            from cipher.environment.traps import BlueTrapType
+            for trap in getattr(state.trap_registry, 'active_blue_traps', []):
+                if trap.trap_type == BlueTrapType.BREADCRUMB:
+                    if getattr(trap, 'target_node', None) in successors:
+                        breadcrumb_nodes_nearby.append(trap.target_node)
+        except Exception:
+            pass
+
+    # ── Change 9: detection_spike_this_step ───────────────────────
+    prev_conf = getattr(state, '_prev_blue_detection_confidence', 0.0)
+    detection_spike = (state.blue_detection_confidence - prev_conf) > 0.20
+    state._prev_blue_detection_confidence = state.blue_detection_confidence
+
     return RedObservation(
         current_node=current,
         current_node_type=masked_type,
@@ -314,6 +339,10 @@ def generate_red_observation(
         # A2: smart path strategy
         available_paths=available_paths,
         honeypot_nodes_nearby=honeypot_nodes_nearby,
+        # B.md additions
+        exfiltrated_files=list(state.red_exfiltrated_files),
+        breadcrumb_nodes_nearby=breadcrumb_nodes_nearby,
+        detection_spike_this_step=detection_spike,
     )
 
 

@@ -18,8 +18,9 @@ python main.py          # Watch the competition — no setup needed
 | Theory-of-mind reasoning | Agents model adversary beliefs via dead drops and deception |
 | Scalable oversight | Oversight Auditor monitors all 8 agents, detects reward hacking |
 | Uncapped rewards | Complexity multiplier scales with zone traversal (no ceiling) |
-| Self-improvement | Prompt evolution every 10 episodes based on reward heuristics |
+| Self-improvement | Prompt evolution every 5 episodes based on reward heuristics |
 | Trained specialist | RED Planner fine-tuned via Unsloth GRPO (LoRA adapter included) |
+| Hybrid performance | Specialist model yields measurable improvements over zero-shot base models |
 | Live telemetry | SQLite-backed episode store, no file-lock issues |
 | Real-time dashboard | 8 tabs: Rewards, Live Logs, Dead Drops, Network Map, Oversight, Difficulty, Learning, History |
 

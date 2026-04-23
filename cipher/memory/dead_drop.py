@@ -212,12 +212,32 @@ class DeadDropVault:
 
         return str(filepath), memory_efficiency
 
+    def _is_drop_tampered(self, drop: DeadDrop) -> bool:
+        """Heuristic tamper detection for dead drops (Change 2)."""
+        # Integrity hash mismatch is the most reliable signal
+        if drop.integrity_hash and not drop.verify():
+            return True
+
+        # Suspicion score impossibly low — BLUE injected fake low suspicion to lure RED
+        suspicion_state = getattr(drop, 'suspicion_state', {}) or {}
+        suspicion = float(suspicion_state.get('current_estimated_score', 0.5))
+        if suspicion < 0.05:
+            return True
+
+        # BLUE-injected optimistic keywords in the continuation directive
+        directive = str(getattr(drop, 'continuation_directive', '')).lower()
+        tamper_keywords = ['proceed immediately', 'all clear', 'no threat', 'safe to exfil', 'undetected']
+        if any(kw in directive for kw in tamper_keywords):
+            return True
+
+        return False
+
     def read(self, node_id: int) -> list[DeadDrop]:
         """
         Read all dead drops available at a given node.
 
         Verifies integrity hash on each drop. Tampered drops are included
-        but flagged — call drop.verify() to check.
+        but flagged — call drop.verify() or check drop.tampered.
 
         Args:
             node_id: The node to read drops from.
@@ -245,6 +265,9 @@ class DeadDropVault:
                         f"Dead drop {drop.dead_drop_id} at node {node_id} "
                         f"FAILED integrity check — possible tampering"
                     )
+
+                # Tag tampered drops so consumers can react (Change 2)
+                drop.tampered = self._is_drop_tampered(drop)
 
                 drops.append(drop)
             except (json.JSONDecodeError, KeyError) as exc:

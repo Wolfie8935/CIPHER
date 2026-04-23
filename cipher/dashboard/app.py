@@ -453,70 +453,45 @@ def extract_rewards(data: dict) -> dict:
     }
 
 
-def build_graph_layout(data: dict) -> tuple[nx.Graph, dict]:
+def build_graph_layout(data: dict) -> tuple[nx.Graph, dict, dict]:
     """Build NetworkX graph and node positions from episode data."""
+    try:
+        from cipher.environment.graph import generate_enterprise_graph
+        from cipher.utils.config import config
+        seed = data.get("seed", data.get("episode_seed", 7961))
+        G = generate_enterprise_graph(
+            n_nodes=config.env_graph_size,
+            honeypot_density=config.env_honeypot_density,
+            seed=seed,
+        )
+        pos = nx.spring_layout(G, seed=42)
+        node_meta = {}
+        for nid in G.nodes():
+            n = G.nodes[nid]
+            zone_val = getattr(n.get("zone"), "value", n.get("zone", 0))
+            node_meta[nid] = {
+                "id": nid,
+                "zone": zone_val,
+                "type": str(n.get("node_type", "workstation")),
+                "hostname": str(n.get("hostname", f"node-{nid}")),
+                "files": n.get("files", []),
+            }
+        return G, pos, node_meta
+    except Exception:
+        pass
+
+    # Fallback if import fails
     G = nx.Graph()
     node_meta = {}
-
-    # Try to get graph info from trace
-    graph_data = data.get("graph", data.get("network", {}))
-    nodes_raw = graph_data.get("nodes", []) if graph_data else []
-    edges_raw = graph_data.get("edges", []) if graph_data else []
-
-    if nodes_raw:
-        for n in nodes_raw:
-            nid = int(n.get("id", n.get("node_id", 0)))
-            G.add_node(nid)
-            node_meta[nid] = n
-        for e in edges_raw:
-            try:
-                if isinstance(e, (list, tuple)) and len(e) >= 2:
-                    a, b = e[0], e[1]
-                elif isinstance(e, dict):
-                    a = e.get("source", e.get("src", e.get("from", e.get("u"))))
-                    b = e.get("target", e.get("dst", e.get("to", e.get("v"))))
-                else:
-                    continue
-                if a is None or b is None:
-                    continue
-                G.add_edge(int(a), int(b))
-            except (TypeError, ValueError):
-                continue
-    else:
-        # Reconstruct a plausible 50-node graph
-        # Zone 0: nodes 0-9 (Perimeter), Zone 1: 10-24 (General),
-        # Zone 2: 25-39 (Sensitive), Zone 3: 40-49 (Critical)
-        for i in range(50):
-            G.add_node(i)
-            zone = 0 if i < 10 else (1 if i < 25 else (2 if i < 40 else 3))
-            node_type = ["workstation", "file_server", "auth_gateway", "db_server"][i % 4]
-            node_meta[i] = {
-                "id": i,
-                "zone": zone,
-                "type": node_type,
-                "hostname": f"corp-{['ws', 'fs', 'ag', 'db'][i % 4]}-{i:02d}",
-                "files": [],
-            }
-        # Add edges with zone structure
-        import random
-        rng = random.Random(data.get("seed", data.get("episode_seed", 42)))
-        # Intra-zone edges
-        zone_groups = defaultdict(list)
-        for nid, meta in node_meta.items():
-            zone_groups[meta["zone"]].append(nid)
-        for zone_nodes in zone_groups.values():
-            for i, a in enumerate(zone_nodes):
-                for b in zone_nodes[i + 1:]:
-                    if rng.random() < 0.35:
-                        G.add_edge(a, b)
-        # Inter-zone edges (sparse)
-        zones = list(zone_groups.values())
-        for i in range(len(zones) - 1):
-            for _ in range(3):
-                a = rng.choice(zones[i])
-                b = rng.choice(zones[i + 1])
-                G.add_edge(a, b)
-
+    for i in range(50):
+        G.add_node(i)
+        zone = 0 if i < 10 else (1 if i < 25 else (2 if i < 40 else 3))
+        node_meta[i] = {
+            "id": i,
+            "zone": zone,
+            "type": "workstation",
+            "hostname": f"node-{i:02d}",
+        }
     seed = data.get("seed", data.get("episode_seed", 42))
     pos = nx.spring_layout(G, seed=seed, k=2.5)
     return G, pos, node_meta
@@ -831,6 +806,26 @@ def build_network_figure(data: dict, step: int, C: dict) -> go.Figure:
                     line=dict(color=C["red"], width=2),
                 ),
                 hoverinfo="none", showlegend=True,
+            )
+        )
+
+    # ── CLASH Marker (Blue investigating Red's current node)
+    if red_current is not None and red_current in pos and red_current in blue_investigated:
+        cx, cy = pos[red_current]
+        traces.append(
+            go.Scatter(
+                x=[cx], y=[cy], mode="markers+text",
+                name="⚔️ CLASH",
+                marker=dict(
+                    size=32, symbol="star", color=C["yellow"],
+                    line=dict(color=C["red"], width=3),
+                ),
+                text=["⚔️ CLASH!"],
+                textposition="top center",
+                textfont=dict(size=14, color=C["yellow"]),
+                hoverinfo="text",
+                hovertext="⚔️ CLASH! Blue investigating Red's current node!",
+                showlegend=True,
             )
         )
 
@@ -1174,7 +1169,6 @@ def make_layout():
             html.Div([
                 # LLM mode badge
                 html.Div(
-                    f"● {infer_runtime_mode({})}",
                     id="mode-badge",
                     style={
                         "fontSize": "10px",
@@ -1696,10 +1690,20 @@ def load_episode_data(path):
     Output("mode-badge", "children"),
     Output("mode-badge", "style"),
     Input("episode-data-store", "data"),
+    Input("episode-dropdown", "value"),
 )
-def update_mode_badge(data):
+def update_mode_badge(data, path):
     mode = infer_runtime_mode(data if isinstance(data, dict) else {})
-    is_live = "LIVE" in mode
+    if mode == "UNKNOWN" and path:
+        path_str = str(path).lower()
+        if "_live.json" in path_str:
+            mode = "LIVE"
+        elif "_hybrid.json" in path_str:
+            mode = "HYBRID"
+        elif "_stub.json" in path_str:
+            mode = "STUB"
+
+    is_live = mode in ("LIVE", "HYBRID")
     color = DARK["green"] if is_live else DARK["yellow"]
     style = {
         "fontSize": "10px",
@@ -1709,7 +1713,7 @@ def update_mode_badge(data):
         "borderRadius": "4px",
         "padding": "4px 10px",
     }
-    return f"● {mode}", style
+    return f"♦ {mode}", style
 
 
 @app.callback(

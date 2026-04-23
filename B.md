@@ -489,16 +489,23 @@ _validate_hybrid_models()
 ---
 
 ## Checklist
-- [ ] Change 1: Multi-specialist `_is_hybrid_specialist()` and `_act_lora()` in `base_agent.py`
-- [ ] Change 2: Tamper detection in `dead_drop.py` + episode runner
-- [ ] Change 3: Rate-of-change early abort in `planner.py`
-- [ ] Change 4: Trap-aware path scoring in `planner.py`
-- [ ] Change 5: Exfil deduplication in `exfiltrator.py` + observation
-- [ ] Change 6: Breadcrumb awareness in `observation.py` + `planner.py`
-- [ ] Change 7: Dead drop coordination bus in `analyst.py` + `planner.py`
-- [ ] Change 8: Smarter trap timing in `operative.py`
-- [ ] Change 9: False escalation detection in `observation.py` + `planner.py`
-- [ ] Change 10: Update `red_planner.txt` prompt
-- [ ] Change 11: Hybrid model validation in `main.py`
+- [x] Change 1: Multi-specialist `_is_hybrid_specialist()` and `_act_lora()` in `base_agent.py` — `_LORA_PATH_MAP` dict routes 4 specialist agents
+- [ ] Change 2: Tamper detection in `dead_drop.py` + episode runner — pending
+- [x] Change 3: Rate-of-change early abort in `planner.py` — thresholds raised (0.60→0.78 susp, 0.18→0.20 delta) to avoid premature abort
+- [x] Change 4: Trap-aware path scoring in `planner.py` — spike penalty 0.50, zone bonus tripled (-0.10→-0.30), zone pool gate raised (0.70→0.82)
+- [x] Change 5: Exfil deduplication in `exfiltrator.py` + observation — cross-references `obs.exfiltrated_files`
+- [x] Change 6: Breadcrumb awareness in `observation.py` + `planner.py` — `breadcrumb_nodes_nearby` excluded from safe paths
+- [x] Change 7: Dead drop coordination bus in `analyst.py` + `planner.py` — `coordination.json` written by Planner, read by Analyst
+- [x] Change 8: Smarter trap timing in `operative.py` — traps only when blue_conf > 0.45, wait threshold raised (0.60→0.82)
+- [x] Change 9: False escalation detection in `observation.py` + `planner.py` — `detection_spike_this_step` flag + planner warning
+- [x] Change 10: Update `red_planner.txt` + `red_operative.txt` + `red_exfiltrator.txt` prompts — major threshold fixes:
+  - Evasion threshold: 0.50 → 0.72 (was causing waits at step 8 with 0.44 suspicion)
+  - Abort threshold: 0.80 → 0.82 
+  - Exfil safe threshold: 0.50 → 0.78
+  - Zone progression mandate added with urgency warnings
+  - Dead drop discipline: only on context reset, max 2/episode
+  - Wait discipline: never wait twice in a row
+  - Suspicion "RISING" label: now fires at 0.55 not 0.30
+- [ ] Change 11: Hybrid model validation in `main.py` — pending
 - [ ] Wait for A.md teammate to deliver 4 model zips, then place in correct folders + update `.env`
-- [ ] Run `python main.py --mode hybrid --episodes 5` and confirm RED scores improve
+- [ ] Run `python main.py --hybrid --episodes 5` and confirm RED scores improve

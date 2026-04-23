@@ -332,20 +332,20 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
         rr = red_reward
         console.print(
             f"  [red]RED[/red]   total=[bold]{rr.total:+.3f}[/bold]  "
-            f"exfil={getattr(rr,'exfil_bonus',0.0):+.3f}  "
-            f"stealth={getattr(rr,'stealth_bonus',0.0):+.3f}  "
+            f"exfil={getattr(rr,'exfiltration_completeness',0.0):+.3f}  "
+            f"stealth={1.0 - getattr(rr,'detection_probability',0.0):+.3f}  "
             f"abort_pen={getattr(rr,'abort_penalty',0.0):+.3f}"
         )
         # BLUE
         br = blue_reward
         console.print(
             f"  [blue]BLUE[/blue]  total=[bold]{br.total:+.3f}[/bold]  "
-            f"detection={getattr(br,'detection_bonus',0.0):+.3f}  "
-            f"honeypot={getattr(br,'honeypot_rate',0.0):+.3f}  "
-            f"fp_pen={getattr(br,'false_positive_penalty',0.0):+.3f}"
+            f"detection={getattr(br,'detection_accuracy_score',0.0):+.3f}  "
+            f"honeypot={getattr(br,'honeypot_trigger_rate',0.0):+.3f}  "
+            f"fp_pen={getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
         )
         if judgment:
-            verdict = getattr(judgment, "fleet_verdict", "?")
+            verdict = getattr(judgment, "episode_verdict", "?")
             vcol = {"red_dominates": "red", "blue_dominates": "blue",
                     "contested": "yellow", "degenerate": "dim"}.get(verdict, "white")
             console.print(f"  Oversight verdict: [{vcol}]{verdict}[/{vcol}]")
@@ -485,6 +485,23 @@ def _get_step_callback_factory(run_id: str):
     return factory
 
 
+def _validate_hybrid_models() -> None:
+    """Check that all specialist LoRA adapters exist; warn if missing (Change 11)."""
+    specialists = {
+        "RED Planner v2":        os.getenv("RED_PLANNER_LORA_PATH",       "red trained/cipher-red-planner-v2"),
+        "RED Analyst v1":        os.getenv("RED_ANALYST_LORA_PATH",        "red trained/cipher-red-analyst-v1"),
+        "BLUE Surveillance v1":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",  "blue trained/cipher-blue-surveillance-v1"),
+        "BLUE ThreatHunter v1":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
+    }
+    console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
+    for name, path in specialists.items():
+        if os.path.exists(path):
+            console.print(f"    [green]✓[/green] {name}: {path}")
+        else:
+            console.print(f"    [yellow]⚠[/yellow]  {name} NOT FOUND at '{path}' — falling back to NVIDIA NIM")
+    console.print()
+
+
 def main() -> None:
     """Entry point for CIPHER."""
     parser = argparse.ArgumentParser(
@@ -520,6 +537,10 @@ def main() -> None:
     else:
         os.environ.setdefault("LLM_MODE", "stub")
         mode = "stub"
+
+    # Change 11: validate specialist model paths when running hybrid
+    if mode == "hybrid":
+        _validate_hybrid_models()
 
     # Generate a unique run_id so the dashboard can isolate this run
     run_id = f"{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

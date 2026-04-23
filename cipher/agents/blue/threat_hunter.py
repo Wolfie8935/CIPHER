@@ -56,11 +56,28 @@ class BlueThreatHunter(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                          reasoning="No observation — standing down.")
 
-        # High confidence + repeated strongest hypothesis + cooldown => trigger alert.
-        # This reduces false positives from one-step noisy spikes or stale hypotheses.
+        # Determine which zone is most active (where RED likely is)
+        hottest_zone = 0
+        if obs.zone_alert_levels:
+            hottest_zone = max(obs.zone_alert_levels, key=lambda z: obs.zone_alert_levels[z])
+
+        # Zone 3 anomaly = RED is at HVT right now. TRIGGER_ALERT immediately.
+        zone3_anomalies = [a for a in obs.anomaly_feed if a.zone == 3]
+        if zone3_anomalies and obs.current_detection_confidence >= 0.25:
+            target = max(zone3_anomalies, key=lambda a: a.severity).node_id
+            self._last_alert_step = obs.step
+            return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
+                         target_node=target,
+                         reasoning=(
+                             f"Zone 3 (HVT zone) anomaly detected at node {target} — "
+                             f"RED is likely exfiltrating NOW. Issuing immediate alert."
+                         ))
+
+        # High confidence + repeated hypothesis ⇒ alert (lowered from 0.78 to 0.50)
         can_alert_now = (obs.step - self._last_alert_step) >= 3
+        alert_threshold = 0.45 if hottest_zone >= 2 else 0.60
         if (
-            obs.current_detection_confidence > 0.78
+            obs.current_detection_confidence > alert_threshold
             and self._candidate_alert_node is not None
             and self._candidate_streak >= 2
             and can_alert_now
@@ -70,25 +87,30 @@ class BlueThreatHunter(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
                          target_node=target,
                          reasoning=(
-                             f"Confirmed hypothesis at node {target} over {self._candidate_streak} steps "
-                             f"with confidence {obs.current_detection_confidence:.2f} — issuing alert."
+                             f"Confirmed hypothesis node {target} over {self._candidate_streak} steps "
+                             f"(conf={obs.current_detection_confidence:.2f}, zone={hottest_zone}) — alerting."
                          ))
 
-        # Investigate hypothesis nodes
+        # Investigate hypothesis nodes (highest-severity anomaly in hottest zone first)
+        zone_anomalies = [a for a in obs.anomaly_feed if a.zone == hottest_zone and a.node_id is not None]
+        if zone_anomalies:
+            target = max(zone_anomalies, key=lambda a: a.severity).node_id
+            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
+                         target_node=target,
+                         reasoning=f"Investigating zone {hottest_zone} anomaly at node {target} — RED likely in this zone.")
+
         if self._hypothesis_nodes:
             target = random.choice(self._hypothesis_nodes)
             return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
                          target_node=target,
-                         reasoning=f"Investigating hypothesis target: node {target}.")
+                         reasoning=f"Investigating hypothesis target node {target}.")
 
-        # Analyze anomalies
         if obs.anomaly_feed:
             worst = max(obs.anomaly_feed, key=lambda a: a.severity)
             return Action(agent_id=self.agent_id, action_type=ActionType.ANALYZE_ANOMALY,
                          target_node=worst.node_id,
-                         reasoning=f"Analyzing anomaly at node {worst.node_id}.")
+                         reasoning=f"Analyzing highest-severity anomaly at node {worst.node_id}.")
 
-        # Proactive sweep
         if obs.active_honeypots:
             target = random.choice(obs.active_honeypots)
             return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,

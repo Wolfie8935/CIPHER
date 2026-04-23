@@ -251,7 +251,7 @@ class LLMClient:
 
     @staticmethod
     def _strip_json_fences(text: str) -> str:
-        """Strip markdown code fences from LLM response."""
+        """Strip markdown code fences and repair literal newlines inside JSON string values."""
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
@@ -259,7 +259,32 @@ class LLMClient:
                 line for line in lines
                 if not line.strip().startswith("```")
             ).strip()
-        return text
+        # LLMs sometimes wrap long string values with literal newlines, which breaks JSON.
+        # Walk char-by-char: replace bare \n/\r inside quoted strings with a space.
+        result: list[str] = []
+        in_string = False
+        escape_next = False
+        for ch in text:
+            if escape_next:
+                result.append(ch)
+                escape_next = False
+            elif ch == "\\":
+                result.append(ch)
+                escape_next = True
+            elif ch == '"':
+                result.append(ch)
+                in_string = not in_string
+            elif in_string and ch in ("\n", "\r"):
+                result.append(" ")
+            else:
+                result.append(ch)
+        
+        final_text = "".join(result).strip()
+        if in_string:
+            final_text += '"'
+        if final_text.startswith("{") and not final_text.endswith("}"):
+            final_text += "}"
+        return final_text
 
 
 _llm_client_instance: "LLMClient | None" = None

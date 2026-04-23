@@ -138,6 +138,19 @@ class TrainingLoop:
             logger.info(f"═══ Training Episode {episode_num}/{self.n_episodes} ═══")
             scenario = scenario_generator.generate(episode_num)
 
+            try:
+                # Import print functions from main to display UI like normal mode
+                from main import _print_competition_header, _print_episode_battle
+                _print_competition_header(
+                    episode_num=episode_num,
+                    total_episodes=self.n_episodes,
+                    mode=os.environ.get("LLM_MODE", "stub"),
+                    difficulty=scenario.difficulty,
+                    max_steps=15,
+                )
+            except ImportError:
+                pass
+
             _append_training_event(
                 {
                     "episode": episode_num,
@@ -177,6 +190,12 @@ class TrainingLoop:
                     logger,
                     f"Episode {episode_num}: RED={red_total:.4f}  BLUE={blue_total:.4f}",
                 )
+
+                try:
+                    from main import _print_episode_battle
+                    _print_episode_battle(result, episode_num, mode=os.environ.get("LLM_MODE", "stub"))
+                except ImportError:
+                    pass
 
                 for trap_event in getattr(state, "trap_events_log", []):
                     trap_node = _extract_trap_node(trap_event)

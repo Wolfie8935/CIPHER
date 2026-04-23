@@ -33,54 +33,105 @@ class BlueDeceptionArchitect(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                          reasoning="No observation — maintaining current traps.")
 
-        # Periodically trigger strategic deception to exercise Phase 5 trap layer.
-        if self.step_count % 5 == 0 and obs.anomaly_feed:
-            target = obs.anomaly_feed[0].node_id if obs.anomaly_feed[0].node_id is not None else 0
-            return Action(
-                agent_id=self.agent_id,
-                action_type=ActionType.TRIGGER_FALSE_ESCALATION,
-                target_node=target,
-                trap_params={"fake_node": target},
-                reasoning=f"Injecting false escalation signal near node {target} to force RED reaction.",
-            )
-
-        # Opportunistically place runtime honeypots while budget remains.
-        if self.step_count % 3 == 0 and obs.anomaly_feed:
-            anomaly_nodes = [a.node_id for a in obs.anomaly_feed if a.node_id is not None]
-            if anomaly_nodes:
-                target = random.choice(anomaly_nodes)
-                return Action(
-                    agent_id=self.agent_id,
-                    action_type=ActionType.PLACE_HONEYPOT,
-                    target_node=target,
-                    reasoning=f"Placing runtime honeypot at likely RED path node {target}.",
-                )
-
-        # If honeypots triggered — analyze the trigger point
+        # ── Honeypot trigger response (highest priority) ──────────
         if obs.honeypots_triggered_this_step:
             target = obs.honeypots_triggered_this_step[0]
             return Action(agent_id=self.agent_id, action_type=ActionType.ANALYZE_ANOMALY,
                          target_node=target,
                          reasoning=f"Honeypot {target} triggered — analyzing RED contact point.")
 
-        # Analyze anomalies for trap placement
-        if obs.anomaly_feed:
-            anomaly_nodes = [a.node_id for a in obs.anomaly_feed if a.node_id is not None]
-            if anomaly_nodes:
-                target = random.choice(anomaly_nodes)
-                return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
-                             target_node=target,
-                             reasoning=f"Investigating node {target} for trap placement viability.")
+        # ── Determine RED's likely current zone from alert levels ─
+        # RED must pass through zones 0→1→2→3 in order.
+        # We detect which zone has the hottest activity = RED's current zone.
+        # Then we place honeypots in zone+1 (where RED is going NEXT).
+        red_zone_estimate = 0
+        if obs.zone_alert_levels:
+            red_zone_estimate = max(obs.zone_alert_levels, key=lambda z: obs.zone_alert_levels[z])
+        target_zone = min(3, red_zone_estimate + 1)  # place traps ONE zone ahead of RED
 
-        # Periodic honeypot monitoring
-        if obs.active_honeypots and self.step_count % 3 == 0:
+        # ── Build candidate honeypot nodes for the target zone ────
+        # Priority 1: anomaly nodes already in the target zone (highest quality)
+        next_zone_nodes = [
+            a.node_id for a in obs.anomaly_feed
+            if a.node_id is not None and a.zone == target_zone
+        ]
+
+        # Priority 2: anomaly nodes in RED's current estimated zone (still useful)
+        current_zone_nodes = [
+            a.node_id for a in obs.anomaly_feed
+            if a.node_id is not None and a.zone == red_zone_estimate
+        ]
+
+        # Priority 3: any anomaly node (fallback)
+        any_anomaly_nodes = [a.node_id for a in obs.anomaly_feed if a.node_id is not None]
+
+        # ── Honeypot placement every 3 steps (predictive, not reactive) ──
+        if self.step_count % 3 == 0:
+            if next_zone_nodes:
+                target = random.choice(next_zone_nodes)
+                return Action(
+                    agent_id=self.agent_id,
+                    action_type=ActionType.PLACE_HONEYPOT,
+                    target_node=target,
+                    reasoning=(
+                        f"Placing predictive honeypot at zone {target_zone} node {target} — "
+                        f"RED is in zone {red_zone_estimate}, intercepting its next zone crossing."
+                    ),
+                )
+            elif current_zone_nodes:
+                target = random.choice(current_zone_nodes)
+                return Action(
+                    agent_id=self.agent_id,
+                    action_type=ActionType.PLACE_HONEYPOT,
+                    target_node=target,
+                    reasoning=(
+                        f"Placing honeypot at zone {red_zone_estimate} node {target} — "
+                        f"no next-zone feed available; baiting RED's current area."
+                    ),
+                )
+            elif any_anomaly_nodes:
+                target = random.choice(any_anomaly_nodes)
+                return Action(
+                    agent_id=self.agent_id,
+                    action_type=ActionType.PLACE_HONEYPOT,
+                    target_node=target,
+                    reasoning=f"Fallback honeypot at anomaly node {target} — limited zone intelligence.",
+                )
+
+        # ── False escalation every 5 steps to force RED to wait ───
+        if self.step_count % 5 == 0 and any_anomaly_nodes:
+            target = any_anomaly_nodes[0]
+            return Action(
+                agent_id=self.agent_id,
+                action_type=ActionType.TRIGGER_FALSE_ESCALATION,
+                target_node=target,
+                trap_params={"fake_node": target},
+                reasoning=f"Injecting false alert at node {target} — forcing RED to slow down.",
+            )
+
+        # ── Investigate anomaly nodes in target zone ───────────────
+        if next_zone_nodes:
+            target = random.choice(next_zone_nodes)
+            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
+                         target_node=target,
+                         reasoning=f"Investigating ahead-of-RED zone {target_zone} node {target}.")
+
+        if any_anomaly_nodes:
+            target = random.choice(any_anomaly_nodes)
+            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
+                         target_node=target,
+                         reasoning=f"Investigating anomaly node {target} for trap placement.")
+
+        # ── Periodic honeypot integrity check ─────────────────────
+        if obs.active_honeypots and self.step_count % 4 == 0:
             target = random.choice(obs.active_honeypots)
             return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
                          target_node=target,
                          reasoning=f"Checking honeypot {target} integrity.")
 
         return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
-                     reasoning="Trap configuration stable — no changes needed.")
+                     reasoning="No anomaly activity — trap configuration stable.")
+
 
     def _build_messages(self) -> list[dict[str, str]]:
         messages = super()._build_messages()

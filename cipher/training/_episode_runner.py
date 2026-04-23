@@ -739,6 +739,13 @@ def _process_red_action(
 
     elif action.action_type == ActionType.READ_DEAD_DROP:
         drops = vault.read(state.red_current_node)
+        # Change 2: react to tampered drops — raise suspicion so RED investigates carefully
+        tampered_count = sum(1 for d in drops if getattr(d, 'tampered', False))
+        if tampered_count > 0:
+            state.update_suspicion(0.05 * tampered_count)
+            result['tampered_drops_detected'] = tampered_count
+            result["state_delta"]["tampered_drops_detected"] = tampered_count
+            logger.info(f"[TAMPER] {tampered_count} tampered drop(s) detected at node {state.red_current_node}")
         result["reason"] = "drop_read"
         result["drops_found"] = len(drops)
         result["drops_valid"] = sum(1 for d in drops if d.verify())
@@ -862,11 +869,22 @@ def _process_blue_action(
 def _detect_action_reason_mismatch(action: Action) -> str | None:
     """
     Detect obvious action/reason inconsistencies for diagnostics.
+    Returns a string tag if a mismatch is found, else None.
     """
     if action.action_type != ActionType.STAND_DOWN:
         return None
     reasoning = (action.reasoning or "").lower()
-    trap_intent_terms = ("place", "honeypot", "breadcrumb", "trap", "tamper", "deploy")
+    # Exemption: our fallback handler already replaced the reasoning to match stand_down.
+    # These strings are produced by _parse_action_from_response when a trap is blocked.
+    if "not allowed (budget or pre-condition check)" in reasoning:
+        return None
+    if "guardrail blocked" in reasoning:
+        return None
+    # Detect genuine mismatches: agent WROTE trap intent in its reasoning but action is stand_down.
+    # Avoid matching 'place' inside legitimate non-trap words (e.g., 'replace', 'placeholder').
+    trap_intent_terms = ("honeypot", "breadcrumb", "plant a trap", "deploy trap",
+                         "place a honeypot", "place honeypot", "placing honeypot",
+                         "tamper", "deploy")
     if any(term in reasoning for term in trap_intent_terms):
         return "stand_down_with_trap_intent"
     return None
