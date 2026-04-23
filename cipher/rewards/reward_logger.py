@@ -1,12 +1,14 @@
 """
 cipher/rewards/reward_logger.py
 
-Logs reward components to CSV for training curve visualization.
-Each episode appends one row to rewards_log.csv.
+Logs reward components to CSV and SQLite for training curve visualization.
+Each episode appends one row. SQLite is the primary source (thread-safe);
+CSV is kept for backwards compatibility.
 """
 from __future__ import annotations
 
 import csv
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -50,6 +52,8 @@ class RewardLogger:
     ]
 
     def __init__(self) -> None:
+        self._run_id = os.environ.get("CIPHER_RUN_ID", "default")
+        self._llm_mode = os.environ.get("LLM_MODE", "stub")
         self._ensure_header()
 
     def _ensure_header(self) -> None:
@@ -67,9 +71,10 @@ class RewardLogger:
         oversight: OversightSignal,
         judgment: Optional["AuditorJudgment"] = None,
     ) -> None:
+        ts = datetime.now().isoformat()
         row = {
             "episode": episode,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": ts,
             "steps": steps,
             "terminal_reason": terminal_reason,
             "red_total": round(red.total, 4),
@@ -96,5 +101,17 @@ class RewardLogger:
             "fleet_verdict": judgment.episode_verdict if judgment else "none",
             "fleet_judgment": (judgment.judgment_text[:120] if judgment else "none"),
         }
+
+        # ── CSV (backwards compat) ───────────────────────────────
         with open(self.LOG_FILE, "a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=self.COLUMNS).writerow(row)
+
+        # ── SQLite (primary, thread-safe) ────────────────────────
+        try:
+            from cipher.utils.telemetry_db import get_db
+            db_row = dict(row)
+            db_row["run_id"] = self._run_id
+            db_row["llm_mode"] = self._llm_mode
+            get_db().write_episode(db_row)
+        except Exception:
+            pass

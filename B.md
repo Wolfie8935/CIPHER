@@ -6,115 +6,139 @@
 
 ---
 
-## Track B1 — Fix Dashboard Crash on Filter Change
+## Track B1 — Fix Dashboard Crash on Filter Change ✅ DONE
 
 **Problem**: Switching the "Agent Filter" dropdown in Tab 2 while a run is in progress causes a React key collision crash in Dash. The issue is `update_tab2` rebuilds the entire figure on every interval tick even when the filter hasn't changed.
 
 **Files**: `cipher/dashboard/live.py`
 
 ### Tasks
-- [ ] Open `cipher/dashboard/live.py` → `update_tab2()` (around line 700)
-- [ ] Add `prevent_initial_call=True` to the `@app.callback` decorator if not already present
-- [ ] Add Dash `State("agent-filter", "value")` to the callback signature so we track the last value
-- [ ] Cache the last-computed figure in a `dcc.Store(id="tab2-figure-cache")` component
-- [ ] Only recompute the figure if `filter_val` has changed since last render (compare via Store)
-- [ ] Add the Store component to the Tab 2 layout section
+- [x] Open `cipher/dashboard/live.py` → `update_tab2()` (around line 700)
+- [x] Add `prevent_initial_call=True` to the `@app.callback` decorator if not already present
+- [x] Add Dash `State("t2-filter-cache", "data")` to the callback so we track the last value
+- [x] Cache the last-computed figure in a `dcc.Store(id="t2-filter-cache")` component
+- [x] Only recompute the figure if `filter_val` has changed since last render (compare via Store)
+- [x] Add the Store component to the Tab 2 layout section
 
-**Verify**: Switch filter rapidly 5 times while simulation is running — no crash
+**Implementation**: `_TAB2_CACHE` module-level dict + `dcc.Store(id="t2-filter-cache")` added to `_build_tab2_layout()`. Callback now takes `State("t2-filter-cache", "data")` and uses `callback_context.triggered` to skip recompute on interval ticks when filter unchanged.
 
 ---
 
-## Track B2 — SQLite Telemetry (Replace CSV)
+## Track B2 — SQLite Telemetry (Replace CSV) ✅ DONE
 
 **Problem**: `rewards_log.csv` is written by the episode runner and read by the dashboard simultaneously, causing file-lock errors on Windows. The retry loop (`_load_rewards_csv`) masks this but adds latency.
 
 **Files**: `cipher/utils/reward_logger.py`, `cipher/dashboard/live.py`
 
 ### Tasks
-- [ ] Create `cipher/utils/telemetry_db.py`:
-  ```python
-  # SQLite-backed thread-safe episode telemetry store
-  # Table: episodes(id, episode, steps, terminal_reason,
-  #                red_total, blue_total, oversight_total,
-  #                timestamp REAL)
-  ```
-- [ ] Use `threading.Lock` + `sqlite3.connect(check_same_thread=False)` for thread safety
-- [ ] Expose: `write_episode(...)`, `get_last_n_episodes(n)`, `get_all_episodes()`
-- [ ] Open `cipher/utils/reward_logger.py` → modify `RewardLogger.log()` to write to SQLite **in addition to** CSV (keep CSV for backward compat for 1 sprint)
-- [ ] Open `cipher/dashboard/live.py` → `_load_rewards_csv()` — add SQLite path as primary data source, CSV as fallback
-- [ ] Remove the retry/sleep loop once SQLite is primary
+- [x] Create `cipher/utils/telemetry_db.py`:
+  - Thread-safe SQLite store with `threading.Lock`
+  - `write_episode(...)`, `get_last_n_episodes(n)`, `get_all_episodes(run_id)`
+  - Stores `run_id`, `llm_mode`, all reward columns
+- [x] `cipher/utils/reward_logger.py` → `RewardLogger.log()` now dual-writes to SQLite AND CSV
+- [x] `cipher/dashboard/live.py` → `_get_run_frame()` tries SQLite first; CSV is fallback
+- [x] Retry loop kept for CSV fallback only; SQLite path never blocks
 
-**Verify**: Run `python main.py --live` — dashboard Tab 1 updates smoothly with no "retry" messages in logs
+**Implementation**: `cipher/utils/telemetry_db.py` created (124 lines). `telemetry.db` stored in project root.
 
 ---
 
-## Track B3 — Network Map Real-Time Delta Updates
+## Track B3 — Network Map Real-Time Delta Updates ✅ DONE
 
 **Problem**: The `t3-map` (Tab 3 network visualization) redraws the entire 50-node graph every 2 seconds via Plotly. This causes a jarring full-redraw flash on every tick.
 
 **Files**: `cipher/dashboard/live.py` (around the `update_tab3` function)
 
 ### Tasks
-- [ ] Find `update_tab3()` in `live.py`
-- [ ] Switch from `px.scatter_graph` full rebuild to Plotly `extendData` partial updates:
-  - Track `red_current_node` position across ticks
-  - Only update the RED agent marker's x/y coords + color
-- [ ] Add `dcc.Store(id="network-state-cache")` to hold the last full graph layout
-- [ ] On first render: build full graph layout, save to Store
-- [ ] On subsequent ticks: only patch changed nodes (RED position, detected nodes in red)
-- [ ] Color coding: unvisited = grey, RED visited = orange, detected by BLUE = blue outline, honeypot = purple
+- [x] Find `update_tab3()` in `live.py`
+- [x] Cache edge traces in `_GRAPH_CACHE["edge_traces"]` — built once on first call
+- [x] On subsequent ticks: only rebuild node traces (RED position, trap counts, zone colors)
+- [x] Show live RED position: parse last live_step for `→ nNN`, mark with red star
+- [x] Color coding: zone colors for nodes, gold rings for trap-triggered nodes, star for RED
+- [x] Show RED node label in tooltip with `← RED HERE`
 
-**Verify**: Network map updates smoothly with no flash. Zone progression should be visible as RED moves.
+**Implementation**: Edge traces cached after first build. Node traces rebuilt each tick (cheap). RED current node parsed from `live_steps.jsonl` and highlighted as a red star marker.
 
 ---
 
-## Track B4 — Dashboard Header: Live Agent Status
+## Track B4 — Dashboard Header: Live Agent Status ✅ DONE
 
 **Problem**: The dashboard header only shows "Episode N". Add a live per-agent status row showing which agents called LLM this step and their last action.
 
-**Files**: `cipher/dashboard/live.py`
+**Files**: `cipher/dashboard/live.py`, `main.py`
 
 ### Tasks
-- [ ] Add `dcc.Store(id="agent-status-store")` to the app layout
-- [ ] After each step completes in `_episode_runner.py`, write agent statuses to a sidecar JSON file: `logs/agent_status.json`
+- [x] After each step completes in `main.py` step callback, write `logs/agent_status.json`
   ```json
   {
-    "step": 7,
+    "step": 7, "episode": 2, "zone": "Critical/HVT",
+    "suspicion": 0.85, "detection": 0.18,
     "agents": {
-      "red_planner_01": {"action": "move", "node": 23, "elapsed_ms": 1243},
-      "blue_surveillance_01": {"action": "scan", "node": null, "elapsed_ms": 876}
+      "red_planner_01": {"action": "move", "node": 23, "team": "red"},
+      "blue_surveillance_01": {"action": "scan", "node": null, "team": "blue"}
     }
   }
   ```
-- [ ] Add a new `dcc.Interval(id="status-interval", interval=1000)` (1s tick)
-- [ ] Add callback `update_agent_status_bar()` that reads `agent_status.json` and renders a compact HTML row
-- [ ] Place the status bar below the main header, above the tabs
+- [x] Added `dcc.Interval(id="interval-fast", interval=1500)` (1.5s tick for status + logs)
+- [x] `update_agent_status_bar()` reads `agent_status.json`, renders colored chips per agent
+- [x] Status bar placed below header, above tabs — always visible
+- [x] New **"Live Logs"** tab (`tab-logs`) shows step-by-step narrative feed, newest on top
+- [x] `_write_agent_status()` helper in `main.py` writes status on every step
 
-**Verify**: After each LLM step, agent status row updates within ~1.5s showing current actions
+**Implementation**: Status bar updates every 1.5s via `interval-fast`. Per-agent colored chips show `team:action→node`. Live Logs tab shows monospace step feed grouped by episode.
 
 ---
 
-## Track B5 — Add Episode History Tab (Tab 6 or new)
+## Track B5 — Add Episode History Tab ✅ DONE
 
 **Problem**: There's no way to compare rewards across episodes during a multi-episode run.
 
 **Files**: `cipher/dashboard/live.py`
 
 ### Tasks
-- [ ] Add Tab 6: "Episode History" with:
-  - Line chart: RED reward vs BLUE reward per episode
-  - Bar chart: terminal reasons (exfil / detected / max_steps / stalled)
-  - Table: last 20 episodes with columns: ep, steps, outcome, red_total, blue_total
-- [ ] Data source: `telemetry_db.get_last_n_episodes(20)` (from B2) or CSV fallback
-- [ ] Add to tab pre-rendering so no callback ID errors
+- [x] Added **"History"** tab (`tab-history`) with:
+  - Line chart: RED vs BLUE reward per episode, grouped by run (each run = separate trace)
+  - Bar chart: terminal reasons distribution (exfil/detected/aborted/max_steps)
+  - Table: last 30 episodes with run_id, mode, ep, steps, outcome, RED, BLUE, verdict
+- [x] Data source: `telemetry_db.get_last_n_episodes(200)` (from B2)
+- [x] Fully pre-rendered (all tab IDs always in DOM — no callback errors)
+- [x] `th-rewards-chart`, `th-outcomes-chart`, `th-run-selector`, `th-table` IDs registered
 
-**Verify**: Run 3 episodes with `python main.py --episodes 3 --live` — Tab 6 shows all 3 episodes
+**Implementation**: `_build_tab_history_layout()` + `update_tab_history()` added. Pulls all runs from SQLite, color-codes outcomes, shows run comparison.
+
+---
+
+## Bonus — API Cost Display ✅ DONE
+
+Added `header-cost` span to the dashboard header showing estimated API spend:
+- `stub` mode → `$0.00 (stub)`
+- `live/hybrid` → `~$X.XXXX` based on `training_state.json → estimated_cost_usd`
+- `main.py` now calculates cost on run completion and writes to `training_state.json`
+
+---
+
+## Bonus — Enhanced Learning Curve (Tab 6) ✅ DONE
+
+Tab 6 now has **3 charts** instead of 2:
+1. **Reward curves**: raw (dim) + 10-ep moving average (bright) + evolution vlines
+2. **RED−BLUE gap chart**: bar per episode colored red/blue by sign, + gold moving avg
+3. **Rolling win rate**: 10-ep window, 50% reference line
+
+---
+
+## Bonus — Trace Naming ✅ DONE
+
+Episode traces now saved as `episode_{NNN}_{YYYYMMDD_HHMMSS}_{mode}.json` (e.g. `episode_001_20260423_183700_live.json`) for easy identification in the dashboard trace selector.
 
 ---
 
 ## Verification Checklist
 
 ```bash
+# Syntax check
+python -c "import main; print('OK')"
+python -c "import cipher.dashboard.live; print('OK')"
+
 # Dashboard loads without errors
 python main.py --live
 # Open http://127.0.0.1:8050
@@ -123,14 +147,14 @@ python main.py --live
 # Check Tab 2 filter doesn't crash
 # Check network map doesn't flash
 # Check agent status bar updates
-
-# Dash app should not print any "Callback error" to console
+# Check Live Logs tab shows steps
+# Check History tab shows cross-run data
 ```
 
 ## Notes for Teammate
 
 - Do NOT edit `cipher/training/_episode_runner.py` — that's being modified in A.md Track A4
 - Do NOT edit `cipher/utils/llm_client.py` — that's A.md territory
-- The `live.py` file is ~1400 lines — use `Ctrl+F` / grep to navigate
+- The `live.py` file is ~1880 lines — use `Ctrl+F` / grep to navigate
 - All new Store components must be added to the `_build_layout()` function OR the pre-rendered tab layout
 - Test with `python -m pytest tests/test_dashboard*.py -v` if dashboard tests exist

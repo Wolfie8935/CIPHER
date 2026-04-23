@@ -105,7 +105,7 @@ class TrainingLoop:
         self.n_episodes = n_episodes
         logger.debug(f"TrainingLoop initialized: {n_episodes} episodes")
 
-    def run(self) -> None:
+    def run(self, step_callback_factory=None) -> None:
         """
         Run the training loop.
 
@@ -160,13 +160,15 @@ class TrainingLoop:
                     honeypot_density=config.env_honeypot_density,
                     seed=scenario.episode_seed,
                 )
+                cb = step_callback_factory(episode_num) if step_callback_factory else None
                 result = run_episode(
                     scenario=scenario,
                     graph=graph,
                     cfg=config,
                     episode_number=episode_num,
-                    max_steps=10,  # Short episodes for Phase 1
+                    max_steps=15,  # Phase 1: 15 steps
                     verbose=False,
+                    step_callback=cb,
                 )
                 red_total = result["red_reward"].total
                 blue_total = result["blue_reward"].total
@@ -428,6 +430,11 @@ class TrainingLoop:
                         "blue_policy_updates": blue_update_count,
                     }
                 )
+
+        # Final evolution if the last episode didn't trigger one
+        if self.n_episodes % evolver.EVOLVE_EVERY_N != 0:
+            logger.info("Triggering final prompt evolution for remaining episodes...")
+            evolver.evolve(self.n_episodes)
 
         logger.info("Training loop complete")
         _write_training_state(

@@ -34,7 +34,7 @@ class PromptEvolver:
 
     PROMPTS_DIR: Path = Path("cipher/agents/prompts")
     EVOLUTION_LOG: Path = Path("prompt_evolution_log.jsonl")
-    EVOLVE_EVERY_N: int = 10
+    EVOLVE_EVERY_N: int = 5
 
     # Prompt files updated for each team
     _RED_PROMPTS: tuple[str, ...] = (

@@ -20,6 +20,8 @@ python main.py          # Watch the competition — no setup needed
 | Uncapped rewards | Complexity multiplier scales with zone traversal (no ceiling) |
 | Self-improvement | Prompt evolution every 10 episodes based on reward heuristics |
 | Trained specialist | RED Planner fine-tuned via Unsloth GRPO (LoRA adapter included) |
+| Live telemetry | SQLite-backed episode store, no file-lock issues |
+| Real-time dashboard | 8 tabs: Rewards, Live Logs, Dead Drops, Network Map, Oversight, Difficulty, Learning, History |
 
 ---
 
@@ -40,6 +42,7 @@ python main.py          # Watch the competition — no setup needed
 | 11 | Google Colab Unsloth GRPO training notebook | ✅ |
 | 12 | Replay Dashboard (port 8050, episode trace scrubber) | ✅ |
 | 13 | Live Training Dashboard (unified, 6 tabs, auto-poll) | ✅ |
+| 14 | Dashboard v2: SQLite telemetry, Live Logs, History tab, agent status bar, gap chart | ✅ |
 
 **Tests: 290 passing, 0 failing**
 
@@ -75,7 +78,7 @@ python main.py --hybrid
 # All agents use NVIDIA NIM LLMs (requires NVIDIA_API_KEY)
 python main.py --live
 
-# Training loop (10 episodes, writes rewards_log.csv)
+# Training loop (10 episodes, writes rewards_log.csv + telemetry.db)
 python main.py --train
 
 # Verify all 23 module imports resolve
@@ -93,7 +96,20 @@ python -m cipher.dashboard.app
 # Open: http://localhost:8050
 ```
 
-Toggle between **Episode Replay** (step through saved traces) and **Live Training** (6 real-time tabs: Rewards, Dead Drops, Network Map, Oversight, Difficulty, Learning Curve).
+Toggle between **Episode Replay** (step through saved traces) and **Live Training** (8 real-time tabs):
+
+| Tab | What you see |
+|-----|-------------|
+| **Rewards** | RED vs BLUE bar chart per episode + breakdown charts |
+| **Live Logs** | Step-by-step narrative feed (newest on top), updates every 1.5s |
+| **Dead Drops** | RED memory system — efficiency, tampering, filter by team |
+| **Network Map** | 50-node topology — zone colors, trap heatmap, live RED position ★ |
+| **Oversight** | Fleet verdicts, reward hacking flags, episode table |
+| **Difficulty** | Auto-escalating difficulty curve + correlation scatter |
+| **Learning** | Reward curves + RED−BLUE gap chart + 10-ep win rate rolling average |
+| **History** | All runs aggregated from SQLite — cross-run reward comparison + outcome distribution |
+
+Agent status bar (below header) shows every agent's last action, zone, suspicion & detection — updates every 1.5s during live runs. API cost estimate displayed in header after run completes.
 
 Recommended judge demo:
 
@@ -129,6 +145,16 @@ Training notebook: `CIPHER_Training_Colab.ipynb` (runs free on Google Colab T4).
 
 ---
 
+## Telemetry
+
+All episode data is written to:
+- `telemetry.db` — SQLite, thread-safe, primary data source for dashboard (B2)
+- `rewards_log.csv` — CSV, kept for backward compatibility
+- `live_steps.jsonl` — per-step live feed (cleared at run start)
+- `episode_traces/episode_NNN_YYYYMMDD_HHMMSS_MODE.json` — full episode traces
+
+---
+
 ## Tests
 
 ```bash
@@ -149,9 +175,10 @@ cipher/
 ├── rewards/          RED/BLUE/Oversight reward functions + RewardLogger
 ├── memory/           Dead drop vault (RED inter-agent memory)
 ├── training/         Episode runner, training loop, prompt evolver, improvement analyzer
-├── dashboard/        Unified Dash app (replay + live)
-├── utils/            Config, logger, LLM client, LoRA client, mode toggle
+├── dashboard/        Unified Dash app (replay + live, 8 tabs)
+├── utils/            Config, logger, LLM client, LoRA client, mode toggle, telemetry_db
 env_wrapper.py        OpenEnv-compliant CIPHEREnv
 main.py               Competition display CLI
 commands.md           Full command reference
+telemetry.db          SQLite episode store (all runs)
 ```

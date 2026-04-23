@@ -19,11 +19,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 # ── Force UTF-8 on Windows ──────────────────────────────────────
 if sys.platform == "win32":
@@ -364,6 +367,124 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
 
 
 
+_STATE_FILE = Path("training_state.json")
+_LIVE_STEPS_FILE = Path("live_steps.jsonl")
+_AGENT_STATUS_FILE = Path("logs") / "agent_status.json"
+_COST_LOG_FILE = Path("logs") / "api_costs.json"
+
+
+def _write_run_state(state: dict) -> None:
+    try:
+        _STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _append_live_step(data: dict) -> None:
+    try:
+        with open(_LIVE_STEPS_FILE, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(data) + "\n")
+    except Exception:
+        pass
+
+
+def _write_agent_status(data: dict) -> None:
+    try:
+        _AGENT_STATUS_FILE.parent.mkdir(exist_ok=True)
+        _AGENT_STATUS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _rename_trace(ep_num: int, mode: str) -> None:
+    """Rename episode_NNNN.json → episode_NNN_TIMESTAMP_MODE.json after saving."""
+    traces_dir = Path("episode_traces")
+    old_path = traces_dir / f"episode_{ep_num:04d}.json"
+    if old_path.exists():
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        new_path = traces_dir / f"episode_{ep_num:03d}_{ts}_{mode}.json"
+        try:
+            old_path.rename(new_path)
+        except Exception:
+            pass
+
+
+def _get_step_callback_factory(run_id: str):
+    def factory(ep_num: int):
+        _ep_start_ref = [perf_counter()]
+        def _cb(step, max_steps, red_actions, blue_actions, state):
+            if step == 1:
+                _ep_start_ref[0] = perf_counter()
+            elapsed = perf_counter() - _ep_start_ref[0]
+            _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
+            try:
+                red_info = ""
+                for a in red_actions:
+                    if a and a.agent_id.startswith("red_planner"):
+                        atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                        node = f" → n{a.target_node}" if a.target_node is not None else ""
+                        red_info = f"{atype}{node}"
+                        break
+                blue_counts: dict = {}
+                for a in blue_actions:
+                    if a:
+                        k = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                        blue_counts[k] = blue_counts.get(k, 0) + 1
+                blue_info = " ".join(f"{k}×{v}" for k, v in blue_counts.items())
+                zone = getattr(state, "red_current_zone", None)
+                if zone is None:
+                    try:
+                        zone_raw = state.graph.nodes[state.red_current_node].get("zone")
+                        zone = zone_raw.value if hasattr(zone_raw, "value") else int(zone_raw)
+                    except Exception:
+                        zone = 0
+                zone_names = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical/HVT"}
+                susp = round(float(getattr(state, "red_suspicion_score", 0.0)), 3)
+                det = round(float(getattr(state, "blue_detection_confidence", 0.0)), 3)
+                exfil = list(getattr(state, "red_exfiltrated_files", []))
+                zone_label = zone_names.get(int(zone) if zone is not None else 0, "Unknown")
+                step_data = {
+                    "run_id": run_id,
+                    "episode": ep_num,
+                    "step": step,
+                    "max_steps": max_steps,
+                    "red_action": red_info or "waiting",
+                    "blue_actions": blue_info or "—",
+                    "suspicion": susp,
+                    "detection": det,
+                    "zone": zone_label,
+                    "elapsed": round(elapsed, 1),
+                    "exfil_count": len(exfil),
+                    "exfil_files": exfil[-3:],
+                    "timestamp": datetime.now().isoformat(),
+                }
+                _append_live_step(step_data)
+
+                agents_detail: dict = {}
+                for a in (red_actions or []) + (blue_actions or []):
+                    if a:
+                        atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                        agents_detail[a.agent_id] = {
+                            "action": atype,
+                            "node": a.target_node,
+                            "team": "red" if str(a.agent_id).startswith("red") else "blue",
+                        }
+                _write_agent_status({
+                    "run_id": run_id,
+                    "episode": ep_num,
+                    "step": step,
+                    "suspicion": susp,
+                    "detection": det,
+                    "zone": zone_label,
+                    "agents": agents_detail,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
+        return _cb
+    return factory
+
+
 def main() -> None:
     """Entry point for CIPHER."""
     parser = argparse.ArgumentParser(
@@ -378,7 +499,7 @@ def main() -> None:
     parser.add_argument("--hybrid", action="store_true",
                         help="RED Planner uses trained LoRA, others use NIM")
     parser.add_argument("--train", action="store_true",
-                        help="Run training loop (10 episodes)")
+                        help="Run training loop (updates prompts every 5 episodes)")
     parser.add_argument("--train-episodes", type=int, default=10,
                         help="Number of episodes for --train mode (default: 10)")
     parser.add_argument("--debug", action="store_true",
@@ -400,13 +521,27 @@ def main() -> None:
         os.environ.setdefault("LLM_MODE", "stub")
         mode = "stub"
 
+    # Generate a unique run_id so the dashboard can isolate this run
+    run_id = f"{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    os.environ["CIPHER_RUN_ID"] = run_id
+    run_started_at = datetime.now().isoformat()
+
+    # Clear live step feed from any prior run
+    try:
+        _LIVE_STEPS_FILE.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
     if args.train:
         from cipher.training.loop import TrainingLoop
         n = args.train_episodes
         console.print(
             f"[bold cyan]CIPHER Training Loop[/bold cyan] — {n} episodes"
         )
-        TrainingLoop(n_episodes=n).run()
+        factory = _get_step_callback_factory(run_id) if mode in ("live", "hybrid") else None
+        if factory:
+            console.print("  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n")
+        TrainingLoop(n_episodes=n).run(step_callback_factory=factory)
         return
 
     # Import episode runner after setting LLM_MODE
@@ -418,6 +553,16 @@ def main() -> None:
     max_steps = args.steps          # always set (default 15)
     runner_verbose = args.verbose   # False by default — main.py owns display
     save_trace = not args.no_trace
+
+    _write_run_state({
+        "status": "running",
+        "current_episode": 0,
+        "total_episodes": n_episodes,
+        "llm_mode": mode,
+        "run_id": run_id,
+        "started_at": run_started_at,
+        "last_updated": datetime.now().isoformat(),
+    })
 
     scenario_gen = ScenarioGenerator()
     start_time = perf_counter()
@@ -442,15 +587,8 @@ def main() -> None:
             console.print(
                 f"  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n"
             )
-            _ep_start_ref = [perf_counter()]  # mutable cell
-
-            def _make_step_callback(ep_start_ref):
-                def _cb(step, max_steps, red_actions, blue_actions, state):
-                    elapsed = perf_counter() - ep_start_ref[0]
-                    _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
-                return _cb
-
-            step_callback = _make_step_callback(_ep_start_ref)
+            factory = _get_step_callback_factory(run_id)
+            step_callback = factory(ep_num)
 
         result = run_episode(
             scenario=scenario,
@@ -472,6 +610,44 @@ def main() -> None:
 
         if isinstance(result, dict):
             _print_episode_battle(result, ep_num, mode=mode)
+
+        # Rename trace to include timestamp + mode for dashboard trace selector
+        if save_trace:
+            _rename_trace(ep_num, mode)
+
+        # Update dashboard state after each episode
+        _write_run_state({
+            "status": "running",
+            "current_episode": ep_num,
+            "total_episodes": n_episodes,
+            "llm_mode": mode,
+            "run_id": run_id,
+            "started_at": run_started_at,
+            "last_updated": datetime.now().isoformat(),
+        })
+
+    # Estimate API cost (OpenRouter; stub = $0)
+    total_steps_run = n_episodes * max_steps
+    if mode == "live":
+        # ~8 agents × ~800 tokens/call × $0.80/1M tokens (approx)
+        estimated_cost_usd = round(total_steps_run * 8 * 800 * 0.80 / 1_000_000, 4)
+    elif mode == "hybrid":
+        estimated_cost_usd = round(total_steps_run * 7 * 800 * 0.80 / 1_000_000, 4)
+    else:
+        estimated_cost_usd = 0.0
+
+    # Mark run complete
+    _write_run_state({
+        "status": "complete",
+        "current_episode": n_episodes,
+        "total_episodes": n_episodes,
+        "llm_mode": mode,
+        "run_id": run_id,
+        "started_at": run_started_at,
+        "last_updated": datetime.now().isoformat(),
+        "estimated_cost_usd": estimated_cost_usd,
+        "total_steps": total_steps_run,
+    })
 
     elapsed = perf_counter() - start_time
     if n_episodes > 1:
