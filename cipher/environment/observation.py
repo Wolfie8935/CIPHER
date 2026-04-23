@@ -88,6 +88,7 @@ class RedObservation:
     adjacent_node_types: list[NodeType] = field(default_factory=list)
     files_at_current_node: list[str] = field(default_factory=list)
     estimated_suspicion: float = 0.0  # noisy — true + Gaussian(0, 0.1)
+    blue_detection_confidence: float = 0.0  # BLUE detection estimate for abort gating
     dead_drops_available: list[str] = field(default_factory=list)
     step: int = 0
     context_reset_this_step: bool = False
@@ -108,6 +109,12 @@ class RedObservation:
     zone_boundary_ahead: bool = False
     steps_since_last_move: int = 0
     adjacent_node_zones: list[int] = field(default_factory=list)
+
+    # ── A2: smart path strategy ───────────────────────────────────
+    # List of {node, zone, hostname, suspicion_delta} for each neighbor
+    available_paths: list[dict] = field(default_factory=list)
+    # Adjacent node IDs that are known honeypots (masked elsewhere but flagged here)
+    honeypot_nodes_nearby: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -245,6 +252,42 @@ def generate_red_observation(
         z = graph.nodes[n].get("zone")
         adj_zones.append(z.value if hasattr(z, "value") else (z if z is not None else 0))
 
+    # ── A2: available_paths — per-neighbor suspicion delta ────────
+    # Suspicion delta is drawn from edge weight if present, else the action base cost.
+    _BASE_MOVE_SUSPICION = 0.02  # matches _process_red_action fallback
+    available_paths: list[dict] = []
+    honeypot_nodes_nearby: list[int] = []
+
+    for i, n in enumerate(successors):
+        n_data = graph.nodes[n]
+        # Edge suspicion cost: prefer explicit edge attribute, fall back to base cost
+        edge_data = graph.edges.get((current, n), {})
+        susp_delta = float(
+            edge_data.get(
+                "suspicion_delta",
+                edge_data.get("suspicion_cost", _BASE_MOVE_SUSPICION),
+            )
+        )
+
+        n_zone_raw = n_data.get("zone")
+        n_zone_int = n_zone_raw.value if hasattr(n_zone_raw, "value") else (n_zone_raw if n_zone_raw is not None else 0)
+        n_hostname = n_data.get("hostname", f"node-{n}")
+
+        available_paths.append({
+            "node": n,
+            "zone": n_zone_int,
+            "hostname": n_hostname,
+            "suspicion_delta": round(susp_delta, 4),
+        })
+
+        # Identify honeypot neighbors (ground truth — used for avoidance, still masked in type)
+        raw_neighbor_type = n_data.get("node_type", NodeType.STANDARD_NODE)
+        if raw_neighbor_type in (NodeType.HONEYPOT, NodeType.DECOY_ASSET):
+            honeypot_nodes_nearby.append(n)
+
+    # Sort available_paths by suspicion_delta ascending so LLM sees cheapest first
+    available_paths.sort(key=lambda p: p["suspicion_delta"])
+
     return RedObservation(
         current_node=current,
         current_node_type=masked_type,
@@ -252,6 +295,7 @@ def generate_red_observation(
         adjacent_node_types=adj_types,
         files_at_current_node=files,
         estimated_suspicion=round(noisy_suspicion, 3),
+        blue_detection_confidence=round(float(state.blue_detection_confidence), 3),
         dead_drops_available=dead_drop_paths or [],
         step=state.step,
         context_reset_this_step=context_reset_this_step,
@@ -267,6 +311,9 @@ def generate_red_observation(
         zone_boundary_ahead=zone_boundary,
         steps_since_last_move=steps_since,
         adjacent_node_zones=adj_zones,
+        # A2: smart path strategy
+        available_paths=available_paths,
+        honeypot_nodes_nearby=honeypot_nodes_nearby,
     )
 
 

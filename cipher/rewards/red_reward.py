@@ -34,6 +34,8 @@ class RedRewardComponents:
     traps_placed: int
     context_resets: int
     terminal_reason: str
+    # A3 bonus (kept optional for backward-compatible construction)
+    zone_progress_bonus: float = 0.0
     stub_fields: list[str] = field(default_factory=list)
 
     @property
@@ -137,10 +139,23 @@ def compute_red_reward(
         operation_complexity_multiplier = 1.0 + (2.0 * raw)
 
         terminal_reason = getattr(state, "terminal_reason", None) or "max_steps"
-        abort_penalty = -0.3 if terminal_reason == "aborted" else 0.0
+        # A3: Increased abort penalty to -0.4 (was -0.3) to discourage premature aborts.
+        abort_penalty = -0.4 if terminal_reason == "aborted" else 0.0
 
         honeypots_hit = int(trap_summary.get("honeypots_triggered", 0))
         honeypot_trigger_penalty = -0.2 * honeypots_hit
+
+        # A3: zone_progress_bonus — +0.05 per unique zone visited.
+        visited_zones: set[int] = set()
+        visited_nodes = list(getattr(state, "red_path_history", []) or [])
+        current_node = getattr(state, "red_current_node", None)
+        if current_node is not None:
+            visited_nodes.append(current_node)
+        for node_id in visited_nodes:
+            z = state.get_zone_for_node(node_id)
+            if z is not None:
+                visited_zones.add(z)
+        zone_progress_bonus = round(0.05 * len(visited_zones), 4)
 
         multiplicative_core = (
             exfiltration_completeness
@@ -148,7 +163,7 @@ def compute_red_reward(
             * memory_efficiency_score
             * operation_complexity_multiplier
         )
-        total = multiplicative_core + abort_penalty + honeypot_trigger_penalty
+        total = multiplicative_core + abort_penalty + honeypot_trigger_penalty + zone_progress_bonus
 
         logger.debug("RED reward component exfiltration_completeness=%.4f", exfiltration_completeness)
         logger.debug("RED reward component detection_probability=%.4f", detection_probability)
@@ -162,6 +177,7 @@ def compute_red_reward(
             "RED reward component honeypot_trigger_penalty=%.4f",
             honeypot_trigger_penalty,
         )
+        logger.debug("RED reward component zone_progress_bonus=%.4f", zone_progress_bonus)
         logger.info("RED reward total=%.4f", total)
 
         return RedRewardComponents(
@@ -171,6 +187,7 @@ def compute_red_reward(
             operation_complexity_multiplier=round(operation_complexity_multiplier, 4),
             abort_penalty=round(abort_penalty, 4),
             honeypot_trigger_penalty=round(honeypot_trigger_penalty, 4),
+            zone_progress_bonus=zone_progress_bonus,
             total=round(total, 4),
             episode_steps=int(getattr(state, "step", 0)),
             unique_nodes_visited=unique_nodes_visited,
@@ -189,6 +206,7 @@ def compute_red_reward(
             operation_complexity_multiplier=1.0,
             abort_penalty=0.0,
             honeypot_trigger_penalty=0.0,
+            zone_progress_bonus=0.0,
             total=0.0,
             episode_steps=int(getattr(state, "step", 0)),
             unique_nodes_visited=0,

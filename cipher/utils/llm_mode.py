@@ -14,7 +14,16 @@ import os
 
 def get_llm_mode() -> str:
     """Returns the current LLM mode string: 'stub', 'live', or 'hybrid'."""
-    return os.getenv("LLM_MODE", "stub").lower()
+    env_mode = os.getenv("LLM_MODE", "").strip().lower()
+    if env_mode:
+        return env_mode
+    try:
+        from cipher.utils.config import config
+
+        cfg_mode = str(getattr(config, "llm_mode", "stub")).strip().lower()
+        return cfg_mode or "stub"
+    except Exception:
+        return "stub"
 
 
 def is_live_mode() -> bool:

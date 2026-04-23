@@ -75,7 +75,7 @@ class TestRedReward:
         scenario, _, state = _scenario_state()
         state.terminal_reason = "aborted"
         r = compute_red_reward(state, scenario, _VaultStub([]), config)
-        assert r.abort_penalty == -0.3
+        assert r.abort_penalty == -0.4
 
     def test_no_abort_no_penalty(self):
         scenario, _, state = _scenario_state()
@@ -140,7 +140,7 @@ class TestRedReward:
             * (1 - r.detection_probability)
             * r.memory_efficiency_score
             * r.operation_complexity_multiplier
-        ) + r.abort_penalty + r.honeypot_trigger_penalty
+        ) + r.abort_penalty + r.honeypot_trigger_penalty + r.zone_progress_bonus
         assert r.total == pytest.approx(expected, abs=1e-4)
 
 

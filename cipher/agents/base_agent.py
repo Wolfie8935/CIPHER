@@ -265,7 +265,7 @@ class BaseAgent(ABC):
 
         Loads the trained Llama-3.2-1B LoRA adapter (cipher-red-planner) on
         first call, then reuses for all subsequent steps — no re-loading overhead.
-        Falls back to _act_live() (NVIDIA NIM) on any loading error.
+        Falls back to _act_live() via NVIDIA NIM (not localhost) on any loading error.
         """
         import os
 
@@ -289,7 +289,51 @@ class BaseAgent(ABC):
             logger.warning(
                 f"[LoRA] RED Planner LoRA failed ({exc}). Falling back to NVIDIA NIM."
             )
-            return self._act_live()
+            return self._act_live_nvidia_direct()
+
+        action = self._parse_action_from_response(response_text)
+        self._last_reasoning = action.reasoning
+
+        self._update_prompt_history(
+            user_content=self._observation_to_prompt_text(),
+            assistant_content=response_text,
+        )
+
+        return action
+
+    def _act_live_nvidia_direct(self) -> Action:
+        """
+        Call NVIDIA NIM directly, bypassing hybrid local routing.
+
+        Used when the LoRA specialist is unavailable (e.g. torch not installed).
+        Temporarily removes the RED Planner key from _LOCAL_KEYS_IN_HYBRID so
+        _resolve() routes to the NVIDIA client instead of localhost.
+        """
+        from cipher.utils.llm_client import get_llm_client, _LOCAL_KEYS_IN_HYBRID
+
+        messages = self._build_messages()
+        client = get_llm_client()
+
+        # Temporarily pull the planner key out of hybrid routing so it goes
+        # to NVIDIA NIM instead of the unavailable local server.
+        key = self._model_env_key
+        was_in_hybrid = key in _LOCAL_KEYS_IN_HYBRID
+        if was_in_hybrid:
+            _LOCAL_KEYS_IN_HYBRID.discard(key)
+
+        try:
+            response_text = client.complete(
+                model_env_key=key,
+                messages=messages,
+                max_tokens=512,
+                temperature=0.7,
+                expect_json=True,
+                team=self.team,
+            )
+        finally:
+            # Always restore the routing table.
+            if was_in_hybrid:
+                _LOCAL_KEYS_IN_HYBRID.add(key)
 
         action = self._parse_action_from_response(response_text)
         self._last_reasoning = action.reasoning
@@ -556,6 +600,20 @@ class BaseAgent(ABC):
             # Normalize EXFIL action shape: file-based target only.
             target_node = None
 
+        if not self._passes_semantic_guardrails(action_type):
+            logger.warning(
+                f"{self.agent_id}: Semantic guardrail rejected action "
+                f"'{action_type.value}'. Falling back to {fallback_type.value}."
+            )
+            action_type = fallback_type
+            target_node = None
+            target_file = None
+            if not reasoning:
+                reasoning = (
+                    "Action violated semantic guardrails for current observation — "
+                    "falling back to safe action."
+                )
+
         if not self._is_trap_action_allowed(action_type, target_node):
             action_type = fallback_type
 
@@ -570,6 +628,43 @@ class BaseAgent(ABC):
             trap_params=trap_params if isinstance(trap_params, dict) else {},
             trap_payload=trap_params if isinstance(trap_params, dict) else {},
         )
+
+    def _passes_semantic_guardrails(self, action_type: ActionType) -> bool:
+        """
+        Central semantic safeguards to reduce unstable policy behavior.
+
+        These checks prevent obviously invalid high-impact actions from being
+        executed when the current observation does not support them.
+        """
+        obs = self._current_observation
+
+        # ABORT authority is planner-only for RED team.
+        if action_type == ActionType.ABORT and self.team == "red":
+            if self.role != "planner":
+                return False
+            # RED Planner aborts only under Track A gate:
+            # suspicion > 0.80 AND blue_confidence > 0.60.
+            if isinstance(obs, RedObservation):
+                blue_conf = float(getattr(obs, "blue_detection_confidence", 0.0))
+                return bool(obs.estimated_suspicion > 0.80 and blue_conf > 0.60)
+            return False
+
+        # EXFILTRATE is only valid at HVT nodes.
+        if action_type == ActionType.EXFILTRATE and isinstance(obs, RedObservation):
+            node_type_val = (
+                obs.current_node_type.value
+                if hasattr(obs.current_node_type, "value")
+                else str(obs.current_node_type)
+            )
+            return node_type_val == "high_value_target"
+
+        # BLUE alerts should require strong evidence to reduce false positives.
+        if action_type == ActionType.TRIGGER_ALERT and isinstance(obs, BlueObservation):
+            confidence_ok = float(obs.current_detection_confidence) >= 0.70
+            honeypot_ok = bool(obs.honeypots_triggered_this_step)
+            return confidence_ok or honeypot_ok
+
+        return True
 
     def _is_trap_action(self, action_type: ActionType) -> bool:
         trap_actions = {

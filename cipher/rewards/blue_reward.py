@@ -22,6 +22,8 @@ class BlueRewardComponents:
     false_positive_rate_penalty: float = 0.0
     honeypot_trigger_rate: float = 0.0
     operation_graph_reconstruction_score: float = 0.0
+    # A3: bonus for honeypots that actually caught RED
+    trap_accuracy_bonus: float = 0.0
     total: float = 0.0
 
 
@@ -114,6 +116,13 @@ def compute_blue_reward(
         else:
             honeypot_trigger_rate = min(1.0, honeypots_triggered / total_honeypots)
 
+        # A3: trap_accuracy_bonus — +0.1 for each honeypot that actually caught RED.
+        # A honeypot "catches" RED when the triggered honeypot node appears in RED's path.
+        actual_path_set = set(getattr(state, "red_path_history", []) or [])
+        triggered_honeypot_nodes = set(getattr(state, "blue_honeypots_triggered", []) or [])
+        catches = sum(1 for hp_node in triggered_honeypot_nodes if hp_node in actual_path_set)
+        trap_accuracy_bonus = round(0.1 * catches, 4)
+
         forensics_graph = _extract_forensics_graph(forensics_agent)
         reconstructed_path = set(forensics_graph.get("suspected_path", []) or [])
         actual_path = set(getattr(state, "red_path_history", []) or [])
@@ -127,8 +136,9 @@ def compute_blue_reward(
         total = (
             detection_accuracy_score
             * response_speed_bonus
-            * (1.0 + honeypot_trigger_rate)
+            * (1.0 + 1.5 * honeypot_trigger_rate)   # A3: weight increased ×1.5
             + operation_graph_reconstruction_score
+            + trap_accuracy_bonus                      # A3: per-catch bonus
         ) - false_positive_rate_penalty
 
         logger.debug("BLUE reward component detection_accuracy_score=%.4f", detection_accuracy_score)
@@ -138,6 +148,7 @@ def compute_blue_reward(
             false_positive_rate_penalty,
         )
         logger.debug("BLUE reward component honeypot_trigger_rate=%.4f", honeypot_trigger_rate)
+        logger.debug("BLUE reward component trap_accuracy_bonus=%.4f", trap_accuracy_bonus)
         logger.debug(
             "BLUE reward component operation_graph_reconstruction_score=%.4f",
             operation_graph_reconstruction_score,
@@ -150,6 +161,7 @@ def compute_blue_reward(
             false_positive_rate_penalty=round(false_positive_rate_penalty, 4),
             honeypot_trigger_rate=round(honeypot_trigger_rate, 4),
             operation_graph_reconstruction_score=round(operation_graph_reconstruction_score, 4),
+            trap_accuracy_bonus=round(trap_accuracy_bonus, 4),
             total=round(total, 4),
         )
     except Exception as exc:
