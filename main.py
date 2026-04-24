@@ -22,7 +22,12 @@ import argparse
 import json
 import logging
 import os
+import socket
+import subprocess
 import sys
+import threading
+import time
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -53,6 +58,28 @@ console = Console(force_terminal=True)
 # ── Zone labels ──────────────────────────────────────────────────
 ZONE_NAMES = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical (HVT)"}
 ZONE_COLORS = {0: "dim white", 1: "cyan", 2: "yellow", 3: "bold red"}
+
+# ── Demo mode ASCII banner ────────────────────────────────────────
+DEMO_BANNER = """\033[91m
+╔══════════════════════════════════════════════════════════════╗
+║  C I P H E R  ·  J U D G E   D E M O   M O D E             ║
+║  OpenEnv Hackathon  |  Multi-Agent Adversarial RL            ║
+╠══════════════════════════════════════════════════════════════╣
+║  \033[93mEp 1\033[91m: RED Exfiltration — fast breach showcase             ║
+║  \033[94mEp 2\033[91m: BLUE Honeypot Trap — defensive mechanics            ║
+║  \033[92mEp 3\033[91m: Contested — 8 LLMs in tense back-and-forth battle   ║
+╠══════════════════════════════════════════════════════════════╣
+║  8 LLM agents  ·  50-node network  ·  4 security zones      ║
+╚══════════════════════════════════════════════════════════════╝\033[0m
+"""
+
+# ── ANSI color helpers (for demo + live ticker) ───────────────────
+RED_ANSI   = "\033[91m"
+BLUE_ANSI  = "\033[94m"
+GREEN_ANSI = "\033[92m"
+GOLD_ANSI  = "\033[93m"
+DIM_ANSI   = "\033[90m"
+RESET_ANSI = "\033[0m"
 
 
 def _suspicion_bar(level: float, width: int = 30) -> str:
@@ -175,9 +202,12 @@ def _print_live_step(step: int, max_steps: int, red_actions: list,
     detection = float(getattr(state, "blue_detection_confidence", 0.0))
     exfil_count = len(getattr(state, "red_exfiltrated_files", []))
 
-    console.print(
+    # Estimated total time (running average of elapsed/step so far)
+    est_total = f"~{int(elapsed_s / step * max_steps)}s" if step > 0 else "?"
+
+    step_line = (
         f"  [bold white]Step {step:02d}/{max_steps}[/bold white]  "
-        f"[dim]{elapsed_s:4.1f}s[/dim]  "
+        f"[dim]{elapsed_s:4.1f}s[/dim] [dim]est:{est_total}[/dim]  "
         f"Zone {_zone_badge(zone)}  "
         f"RED: {red_info}  │  "
         f"BLUE: {blue_info}  │  "
@@ -185,6 +215,13 @@ def _print_live_step(step: int, max_steps: int, red_actions: list,
         f"Det [blue]{detection:.0%}[/blue]"
         + (f"  [bold green]✓ {exfil_count} file(s) exfil'd[/bold green]" if exfil_count else "")
     )
+    console.print(step_line)
+
+    # Exfiltration success banner — prominent flash for judges
+    if exfil_count > 0:
+        console.print(
+            f"  [bold red]{'█' * 18} EXFILTRATION IN PROGRESS — {exfil_count} FILE(S) STOLEN {'█' * 18}[/bold red]"
+        )
 
 
 def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") -> None:
@@ -485,6 +522,23 @@ def _get_step_callback_factory(run_id: str):
     return factory
 
 
+def _maybe_start_dashboard_process() -> None:
+    """Start the replay dashboard in the background if port 8050 is not already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("localhost", 8050)) != 0:
+            subprocess.Popen(
+                [sys.executable, "-m", "cipher.dashboard.app"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+
+def _auto_launch_dashboard(delay: float = 4.0) -> None:
+    """Open the replay dashboard in the default browser after a short delay."""
+    time.sleep(delay)
+    webbrowser.open("http://localhost:8050")
+
+
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
     specialists = {
@@ -501,6 +555,133 @@ def _validate_hybrid_models() -> None:
             console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use NVIDIA NIM")
     console.print()
 
+
+
+def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
+    """
+    Run 3 curated showcase episodes for judge demos.
+
+    Episode 1 — Exfiltration showcase: low difficulty, RED has best chance to breach fast.
+    Episode 2 — Blue Defence: elevated honeypot density, BLUE traps RED.
+    Episode 3 — Contested: standard difficulty, long back-and-forth battle.
+    """
+    from cipher.training._episode_runner import run_episode
+    from cipher.environment.scenario import ScenarioGenerator, Scenario
+    from cipher.utils.config import config
+
+    mode = os.environ.get("LLM_MODE", "stub")
+    run_id = os.environ.get("CIPHER_RUN_ID", f"demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+
+    # Demo configurations: (episode_number, description, difficulty_override, honeypot_override)
+    demo_configs = [
+        (1,  "RED EXFILTRATION SHOWCASE",  0.1, 2),   # Easy — RED wins fast
+        (2,  "BLUE HONEYPOT DEFENCE",       0.5, 12),  # Many traps — BLUE detection mechanics
+        (3,  "CONTESTED BATTLE",            0.4, 7),   # Balanced — tension + back-and-forth
+    ]
+
+    scenario_gen = ScenarioGenerator()
+
+    for ep_num, demo_label, difficulty_override, hp_override in demo_configs:
+        console.print()
+        console.print(
+            f"[bold yellow]{'═' * 60}[/bold yellow]\n"
+            f"  [bold white]DEMO EPISODE {ep_num}/3:[/bold white] "
+            f"[bold cyan]{demo_label}[/bold cyan]\n"
+            f"[bold yellow]{'═' * 60}[/bold yellow]"
+        )
+        console.print()
+
+        scenario = scenario_gen.generate(ep_num)
+        # Override difficulty for this showcase
+        scenario.difficulty = difficulty_override
+        scenario.n_honeypots = hp_override
+
+        _print_competition_header(
+            episode_num=ep_num,
+            total_episodes=3,
+            mode=mode,
+            difficulty=scenario.difficulty,
+            max_steps=max_steps,
+        )
+
+        ep_start = perf_counter()
+        step_callback = None
+        if mode in ("live", "hybrid"):
+            factory = _get_step_callback_factory(run_id)
+            step_callback = factory(ep_num)
+
+        result = run_episode(
+            scenario=scenario,
+            graph=scenario.generated_graph,
+            cfg=config,
+            max_steps=max_steps,
+            verbose=False,
+            save_trace=save_trace,
+            episode_number=ep_num,
+            step_callback=step_callback,
+        )
+
+        ep_elapsed = perf_counter() - ep_start
+        if mode in ("live", "hybrid"):
+            console.print(f"\n  [dim]Episode {ep_num} finished in {ep_elapsed:.1f}s[/dim]\n")
+
+        if isinstance(result, dict):
+            _print_episode_battle(result, ep_num, mode=mode)
+
+            # Narrative report
+            try:
+                from cipher.utils.storyteller import generate_report
+                _state = result.get("state")
+                _ep_log = list(getattr(_state, "episode_log", []))
+                _terminal = str(getattr(_state, "terminal_reason", "max_steps"))
+                _rr = result.get("red_reward")
+                _br = result.get("blue_reward")
+                generate_report(
+                    episode_num=ep_num,
+                    episode_log=_ep_log,
+                    outcome=_terminal,
+                    red_reward=float(_rr.total) if _rr else 0.0,
+                    blue_reward=float(_br.total) if _br else 0.0,
+                    save=True,
+                )
+            except Exception:
+                pass
+
+        if save_trace:
+            _rename_trace(ep_num, mode)
+
+        _write_run_state({
+            "status": "running",
+            "current_episode": ep_num,
+            "total_episodes": 3,
+            "llm_mode": mode,
+            "run_id": run_id,
+            "last_updated": datetime.now().isoformat(),
+        })
+
+        if ep_num < 3:
+            console.print(
+                f"\n[dim yellow]  → Dashboard updated. Switch to browser to see Episode {ep_num} replay.[/dim yellow]"
+                f"\n[dim]  Starting Episode {ep_num + 1} in 2 seconds…[/dim]\n"
+            )
+            time.sleep(2)
+
+    _write_run_state({
+        "status": "complete",
+        "current_episode": 3,
+        "total_episodes": 3,
+        "llm_mode": mode,
+        "run_id": run_id,
+        "last_updated": datetime.now().isoformat(),
+    })
+
+    console.print()
+    console.print(
+        "[bold green]╔══════════════════════════════════════════════════════╗[/bold green]\n"
+        "[bold green]║  DEMO COMPLETE — Switch to browser for full replay   ║[/bold green]\n"
+        "[bold green]║  http://localhost:8050                               ║[/bold green]\n"
+        "[bold green]╚══════════════════════════════════════════════════════╝[/bold green]"
+    )
 
 
 def main() -> None:
@@ -528,6 +709,8 @@ def main() -> None:
                         help="Show per-step agent actions (very verbose)")
     parser.add_argument("--video", action="store_true",
                         help="Generate CIPHER Cinema video highlights after each episode")
+    parser.add_argument("--demo", action="store_true",
+                        help="Run 3 curated showcase episodes for judge demo (auto-launches dashboard)")
     args = parser.parse_args()
 
     # Set LLM mode
@@ -550,11 +733,29 @@ def main() -> None:
     os.environ["CIPHER_RUN_ID"] = run_id
     run_started_at = datetime.now().isoformat()
 
+    # ── Demo mode ────────────────────────────────────────────────
+    if args.demo:
+        print(DEMO_BANNER, flush=True)
+        console.print("[bold cyan]Starting dashboard in background…[/bold cyan]")
+        _maybe_start_dashboard_process()
+        # Open browser after 5 seconds (gives dashboard time to start)
+        t = threading.Thread(target=_auto_launch_dashboard, args=(5.0,), daemon=True)
+        t.start()
+        console.print("[dim]Dashboard will open at http://localhost:8050 in ~5s[/dim]\n")
+        _run_demo_mode(max_steps=args.steps, save_trace=not args.no_trace)
+        return
+
     # Clear live step feed from any prior run
     try:
         _LIVE_STEPS_FILE.write_text("", encoding="utf-8")
     except Exception:
         pass
+
+    # ── Auto-launch dashboard for live/hybrid ────────────────────
+    if args.live or args.hybrid:
+        _maybe_start_dashboard_process()
+        t = threading.Thread(target=_auto_launch_dashboard, args=(4.0,), daemon=True)
+        t.start()
 
     if args.train:
         from cipher.training.loop import TrainingLoop

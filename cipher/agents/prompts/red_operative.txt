@@ -62,7 +62,7 @@ OUTPUT FORMAT (always valid JSON, no other text):
 
 
 ## LEARNED HEURISTICS (Auto-evolved)
-- LEARNED: Top-quartile episodes maintained stealth score 0.62. WAIT or use false_trail trap when suspicion exceeds 0.45.
+- LEARNED: Top-quartile episodes maintained stealth score 0.57. WAIT or use false_trail trap when suspicion exceeds 0.48.
 - LEARNED: Low abort rate detected. Remember: aborting early is better than triggering honeypots. Abort if suspicion exceeds 0.80 and no exfil yet.
 - LEARNED: Top-quartile episodes achieve complexity multiplier 1.57x by traversing multiple zones. Prioritize crossing zone boundaries before exfiltrating.
 - LEARNED: Bottom-quartile episodes write 10.3 dead drops on average. Write at most 1-2 focused dead drops. Excessive drops hurt memory_efficiency_score.
