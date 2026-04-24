@@ -96,7 +96,7 @@ class LLMClient:
             self._local = None  # LoRAClient loads from disk; no local server needed
             import os as _os
             self._lora_adapter_path = _os.getenv(
-                "RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v3"
+                "RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"
             )
 
         else:

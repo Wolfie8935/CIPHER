@@ -14,6 +14,7 @@ Usage:
   python main.py --live                  # all agents use NVIDIA NIM
   python main.py --hybrid                # RED Planner uses trained LoRA
   python main.py --train                 # training loop (10 episodes)
+  python main.py --eval 20               # E.md evaluation: stub vs hybrid comparison
   python main.py --debug                 # show all agent debug logs
 """
 from __future__ import annotations
@@ -542,9 +543,9 @@ def _auto_launch_dashboard(delay: float = 4.0) -> None:
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
     specialists = {
-        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v3"),
+        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v1"),
         "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
-        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v2"),
+        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
         "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
     }
     console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
@@ -707,11 +708,57 @@ def main() -> None:
                         help="Skip saving episode traces")
     parser.add_argument("--verbose", action="store_true",
                         help="Show per-step agent actions (very verbose)")
+<<<<<<< HEAD
     parser.add_argument("--video", action="store_true",
                         help="Generate CIPHER Cinema video highlights after each episode")
     parser.add_argument("--demo", action="store_true",
                         help="Run 3 curated showcase episodes for judge demo (auto-launches dashboard)")
+=======
+    # E.md Change 5 — evaluation flag
+    parser.add_argument(
+        "--eval", type=int, default=0, metavar="N",
+        help="Run E.md evaluation suite: N episodes per mode (stub + hybrid). "
+             "Saves results to eval_results/ and prints a comparison table. "
+             "Example: python main.py --eval 20",
+    )
+>>>>>>> e6fb9bd (training completed)
     args = parser.parse_args()
+
+    # ── E.md Change 5 — --eval flag ─────────────────────────────────────
+    if args.eval > 0:
+        console.print(
+            f"\n[bold cyan]CIPHER Evaluation Suite[/bold cyan] — "
+            f"{args.eval} episodes × (stub + hybrid)\n"
+            f"  [dim]LoRA adapter paths are read from .env / env vars.\n"
+            f"  After RunPod training, update RED_PLANNER_LORA_PATH etc. — no code changes needed.[/dim]\n"
+        )
+        from cipher.training.eval_runner import run_eval, save_eval_results, print_comparison_table
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        eval_modes = ["stub", "hybrid"]
+        payload = run_eval(
+            n_episodes=args.eval,
+            modes=eval_modes,
+            max_steps=args.steps,
+            verbose=args.verbose,
+        )
+        json_path, csv_path = save_eval_results(payload, ts)
+        print_comparison_table(payload)
+        console.print(f"[dim]JSON  → {json_path}[/dim]")
+        console.print(f"[dim]CSV   → {csv_path}[/dim]")
+        # Also generate the proof-of-learning report
+        try:
+            from cipher.utils.report_gen import generate_proof_of_learning_report, save_report
+            report_md  = generate_proof_of_learning_report(payload)
+            report_path = save_report(report_md, ts)
+            console.print(f"[dim]Report→ {report_path}[/dim]")
+        except Exception as _exc:
+            console.print(f"[yellow]report_gen skipped: {_exc}[/yellow]")
+        console.print(
+            "\n[bold green]Evaluation complete![/bold green] "
+            "Open the dashboard Analytics ★ tab to see the comparison charts.\n"
+        )
+        return
 
     # Set LLM mode
     if args.live:

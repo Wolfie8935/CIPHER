@@ -73,16 +73,17 @@ def _tab_header(title: str, description: str) -> html.Div:
 def _build_analytics_tab_layout() -> html.Div:
     return html.Div([
         _tab_header(
-            "CIPHER Analytics — Elo Ratings · Detection Heatmap · Reward Curves",
+            "CIPHER Analytics — Elo Ratings · Detection Heatmap · Reward Curves · Model Comparison",
             "Elo tracks RED vs BLUE win rates as ratings. Heatmap shows which nodes are 'Death Traps'. "
-            "Reward curves with moving averages prove the RL training signal is working.",
+            "Reward curves prove the RL training signal is working. "
+            "Model Comparison shows stub vs hybrid vs live performance side-by-side.",
         ),
         # Winning Metrics Row
         html.Div(
             id="analytics-winning-metrics",
             style={"marginBottom": "12px"},
         ),
-        # Top row: Elo + Reward Curves
+        # Row 1: Elo + Reward Curves
         html.Div([
             html.Div(
                 dcc.Graph(id="analytics-elo-chart", style={"height": "260px"},
@@ -95,9 +96,53 @@ def _build_analytics_tab_layout() -> html.Div:
                 style={"flex": "1"},
             ),
         ], style={"display": "flex", "gap": "12px", "marginBottom": "12px"}),
-        # Bottom: Detection Heatmap (full width)
+        # Row 2: Detection Heatmap (full width)
         dcc.Graph(
             id="analytics-heatmap",
+            style={"height": "320px"},
+            config={"displayModeBar": False},
+        ),
+        # ── E.md additions ───────────────────────────────────────────────
+        html.Div(
+            html.Div("MODEL COMPARISON  ★", style={
+                "color": GOLD_COLOR, "fontSize": "11px", "fontWeight": "700",
+                "letterSpacing": "2px", "padding": "16px 0 8px",
+                "borderTop": f"1px solid {BORDER_COLOR}", "marginTop": "16px",
+            })
+        ),
+        html.Div(
+            "Run  python main.py --eval 20  to populate. Shows stub vs hybrid vs live side-by-side.",
+            style={"color": TEXT_MUTED, "fontSize": "10px", "marginBottom": "10px"},
+        ),
+        # Row 3: Win Rate + Steps comparison
+        html.Div([
+            html.Div(
+                dcc.Graph(id="analytics-compare-winrate", style={"height": "260px"},
+                          config={"displayModeBar": False}),
+                style={"flex": "1"},
+            ),
+            html.Div(
+                dcc.Graph(id="analytics-compare-steps", style={"height": "260px"},
+                          config={"displayModeBar": False}),
+                style={"flex": "1"},
+            ),
+        ], style={"display": "flex", "gap": "12px", "marginBottom": "12px"}),
+        # Row 4: Reward distribution (full width)
+        dcc.Graph(
+            id="analytics-compare-rewarddist",
+            style={"height": "300px"},
+            config={"displayModeBar": False},
+        ),
+        # Row 5: Convergence curve (full width)
+        html.Div(
+            html.Div("CONVERGENCE CURVE  ★", style={
+                "color": GOLD_COLOR, "fontSize": "11px", "fontWeight": "700",
+                "letterSpacing": "2px", "padding": "16px 0 8px",
+                "borderTop": f"1px solid {BORDER_COLOR}", "marginTop": "8px",
+            })
+        ),
+        dcc.Graph(
+            id="analytics-convergence-curve",
             style={"height": "320px"},
             config={"displayModeBar": False},
         ),
@@ -1781,22 +1826,38 @@ def get_live_dashboard() -> dash.Dash:
 
 
 def update_analytics(_n):
-    """Refresh the Analytics tab: Elo chart, heatmap, reward curves."""
+    """Refresh the Analytics tab: Elo, heatmap, reward curves + E.md comparison + convergence."""
+    def _empty():
+        fig = go.Figure()
+        fig.update_layout(paper_bgcolor=PANEL_BG, plot_bgcolor=DARK_BG,
+                          font=dict(color=TEXT_SECONDARY))
+        return fig
+
     try:
         from cipher.dashboard.analytics import (
             build_elo_chart, build_detection_heatmap, build_reward_curves,
+            build_model_comparison_chart, build_convergence_curve,
+            find_latest_eval_json,
         )
         df = _get_run_frame()
         events = _load_training_events()
-        elo_fig = build_elo_chart(df)
+        elo_fig  = build_elo_chart(df)
         heat_fig = build_detection_heatmap(events=events)
         curve_fig = build_reward_curves(df)
-        return elo_fig, heat_fig, curve_fig
+
+        # E.md: Model comparison from latest eval JSON
+        latest_eval = find_latest_eval_json()
+        if latest_eval is not None:
+            fig_wr, fig_steps, fig_dist = build_model_comparison_chart(latest_eval)
+        else:
+            fig_wr = fig_steps = fig_dist = _empty()
+
+        # E.md: Convergence curve from rewards_log.csv
+        conv_fig = build_convergence_curve()
+
+        return elo_fig, heat_fig, curve_fig, fig_wr, fig_steps, fig_dist, conv_fig
     except Exception:
-        empty = go.Figure()
-        empty.update_layout(paper_bgcolor=PANEL_BG, plot_bgcolor=DARK_BG,
-                            font=dict(color=TEXT_SECONDARY))
-        return empty, empty, empty
+        return _empty(), _empty(), _empty(), _empty(), _empty(), _empty(), _empty()
 
 
 def update_winning_metrics_banner(_n):
@@ -1994,12 +2055,16 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
     def _tab_history(n):
         return update_tab_history(n)
 
-    # Analytics tab
+    # Analytics tab (E.md: expanded to 7 outputs)
     @target_app.callback(
         [
-            Output("analytics-elo-chart", "figure"),
-            Output("analytics-heatmap", "figure"),
-            Output("analytics-reward-curves", "figure"),
+            Output("analytics-elo-chart",           "figure"),
+            Output("analytics-heatmap",              "figure"),
+            Output("analytics-reward-curves",        "figure"),
+            Output("analytics-compare-winrate",      "figure"),
+            Output("analytics-compare-steps",        "figure"),
+            Output("analytics-compare-rewarddist",   "figure"),
+            Output("analytics-convergence-curve",    "figure"),
         ],
         Input("interval-component", "n_intervals"),
     )
