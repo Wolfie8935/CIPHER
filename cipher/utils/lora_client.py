@@ -21,8 +21,8 @@ from cipher.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Base model — all specialists share the same base weights, different adapters
-_BASE_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
+# Base model — MUST match what the adapters were trained on (4-bit quantized via unsloth)
+_BASE_MODEL_ID = "unsloth/llama-3.2-1b-instruct-unsloth-bnb-4bit"
 
 # Default adapter path (legacy fallback)
 _DEFAULT_ADAPTER_PATH = os.path.join("red trained", "cipher-red-planner-v1")
@@ -97,19 +97,37 @@ class LoRAClient:
 
             # ── Base model ─────────────────────────────────────────────────
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype  = torch.float16 if torch.cuda.is_available() else torch.float32
 
-            logger.info(f"[LoRA] Loading base model {_BASE_MODEL_ID} on {device} ({dtype})")
+            logger.info(f"[LoRA] Loading base model {_BASE_MODEL_ID} (4-bit) on {device}")
             print(f"\n  🔴 [LoRA] Loading specialist: {Path(resolved).name}")
-            print(f"  🔴 [LoRA] Device: {device.upper()} | dtype: {str(dtype).split('.')[-1]}")
+            print(f"  🔴 [LoRA] Device: {device.upper()} | Base: 4-bit quantized (unsloth)")
 
-            base_model = AutoModelForCausalLM.from_pretrained(
-                _BASE_MODEL_ID,
-                dtype=dtype,                          # dtype= replaces deprecated torch_dtype=
-                device_map="auto" if torch.cuda.is_available() else "cpu",
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-            )
+            try:
+                # Load with 4-bit quantization — matches training setup exactly
+                from transformers import BitsAndBytesConfig
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                )
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    _BASE_MODEL_ID,
+                    quantization_config=bnb_config,
+                    device_map="auto" if torch.cuda.is_available() else "cpu",
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True,
+                )
+            except Exception as bnb_exc:
+                # BitsAndBytes not available on CPU-only Mac — fall back to fp32
+                logger.warning(f"[LoRA] 4-bit load failed ({bnb_exc}), falling back to fp32.")
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    _BASE_MODEL_ID,
+                    torch_dtype=torch.float32,
+                    device_map="cpu",
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True,
+                )
 
             # ── LoRA adapter ───────────────────────────────────────────────
             logger.info(f"[LoRA] Attaching adapter: {resolved}")
