@@ -1,43 +1,43 @@
 {
-  "run_id": "live_20260424_204231",
-  "episode": 3,
-  "step": 15,
-  "suspicion": 0.98,
-  "detection": 0.42,
-  "zone": "Critical/HVT",
+  "run_id": "hybrid_20260425_021931",
+  "episode": 1,
+  "step": 1,
+  "suspicion": 0.098,
+  "detection": 0.04,
+  "zone": "General",
   "agents": {
     "red_planner_01": {
-      "action": "exfiltrate",
-      "node": null,
-      "team": "red"
-    },
-    "red_analyst_01": {
-      "action": "read_file",
-      "node": null,
-      "team": "red"
-    },
-    "red_operative_01": {
-      "action": "read_file",
-      "node": 38,
-      "team": "red"
-    },
-    "red_exfiltrator_01": {
       "action": "wait",
       "node": null,
       "team": "red"
     },
+    "red_analyst_01": {
+      "action": "move",
+      "node": 13,
+      "team": "red"
+    },
+    "red_operative_01": {
+      "action": "move",
+      "node": 5,
+      "team": "red"
+    },
+    "red_exfiltrator_01": {
+      "action": "move",
+      "node": 5,
+      "team": "red"
+    },
     "blue_surveillance_01": {
-      "action": "stand_down",
-      "node": null,
+      "action": "analyze_anomaly",
+      "node": 27,
       "team": "blue"
     },
     "blue_threat_hunter_01": {
       "action": "investigate_node",
-      "node": 22,
+      "node": 27,
       "team": "blue"
     },
     "blue_deception_architect_01": {
-      "action": "stand_down",
+      "action": "analyze_anomaly",
       "node": null,
       "team": "blue"
     },
@@ -47,5 +47,5 @@
       "team": "blue"
     }
   },
-  "timestamp": "2026-04-24T20:49:33.889920"
+  "timestamp": "2026-04-25T02:21:16.383670"
 }

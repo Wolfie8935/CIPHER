@@ -20,9 +20,9 @@ HF_REPO_ID = os.getenv("HF_REPO_ID", "wolfie8935/cipher-specialists")
 HF_TRACES_REPO = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
 
 SPECIALIST_DIRS = {
-    "red_planner": os.getenv("RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v3"),
+    "red_planner": os.getenv("RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"),
     "red_analyst": os.getenv("RED_ANALYST_LORA_PATH", "red trained/cipher-red-analyst-v1"),
-    "blue_surveillance": os.getenv("BLUE_SURVEILLANCE_LORA_PATH", "blue trained/cipher-blue-surveillance-v2"),
+    "blue_surveillance": os.getenv("BLUE_SURVEILLANCE_LORA_PATH", "blue trained/cipher-blue-surveillance-v1"),
     "blue_threat_hunter": os.getenv("BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
 }
 

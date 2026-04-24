@@ -542,9 +542,9 @@ def _auto_launch_dashboard(delay: float = 4.0) -> None:
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
     specialists = {
-        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v3"),
+        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v1"),
         "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
-        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v2"),
+        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
         "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
     }
     console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
@@ -711,6 +711,13 @@ def main() -> None:
                         help="Generate CIPHER Cinema video highlights after each episode")
     parser.add_argument("--demo", action="store_true",
                         help="Run 3 curated showcase episodes for judge demo (auto-launches dashboard)")
+    # E.md Change 5 — evaluation flag
+    parser.add_argument(
+        "--eval", type=int, default=0, metavar="N",
+        help="Run E.md evaluation suite: N episodes per mode (stub + hybrid). "
+             "Saves results to eval_results/ and prints comparison table. "
+             "Example: python main.py --eval 20",
+    )
     args = parser.parse_args()
 
     # Set LLM mode
@@ -732,6 +739,28 @@ def main() -> None:
     run_id = f"{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     os.environ["CIPHER_RUN_ID"] = run_id
     run_started_at = datetime.now().isoformat()
+
+    # ── E.md Change 5 — --eval flag ──────────────────────────────
+    if args.eval > 0:
+        console.print(
+            f"\n[bold cyan]CIPHER Evaluation Suite[/bold cyan] — "
+            f"[yellow]{args.eval}[/yellow] episodes × [yellow]stub + hybrid[/yellow] modes\n"
+        )
+        from cipher.training.eval_runner import run_eval, print_summary, save_results
+        from cipher.utils.report_gen import generate_proof_of_learning_report, save_report
+        eval_json = run_eval(
+            n_episodes=args.eval,
+            modes=["stub", "hybrid"],
+            max_steps=args.steps,
+            verbose=False,
+        )
+        print_summary(eval_json)
+        saved = save_results(eval_json)
+        report_md = generate_proof_of_learning_report(eval_json)
+        rpath = save_report(report_md, saved["timestamp"])
+        console.print(f"\n[green]✓[/green] Results → [dim]{saved['json']}[/dim]")
+        console.print(f"[green]✓[/green] Report  → [dim]{rpath}[/dim]")
+        return
 
     # ── Demo mode ────────────────────────────────────────────────
     if args.demo:
