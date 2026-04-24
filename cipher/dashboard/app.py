@@ -1183,6 +1183,7 @@ def make_layout():
         dcc.Store(id="episode-data-store", data={}),
         dcc.Store(id="autoplay-store", data=False),
         dcc.Interval(id="autoplay-interval", interval=1200, disabled=True),
+        dcc.Download(id="export-download"),
 
         # ══════════ TOP BAR ══════════
         html.Div([
@@ -1279,53 +1280,72 @@ def make_layout():
         # ══════════ WINNING METRICS BANNER ══════════
         _make_winning_metrics_bar(C),
 
-        # Quick guide panel (always visible for judges)
-        html.Details([
-            html.Summary(
-                "How to read this dashboard — click to collapse",
-                style={
-                    "cursor": "pointer",
-                    "fontFamily": "'JetBrains Mono', monospace",
-                    "fontSize": "11px",
-                    "color": C["text"],
-                    "fontWeight": "600",
-                    "outline": "none",
-                },
-            ),
+        # ── Visual Legend (judge-scannable in 10 seconds) ────────────
+        html.Div([
+            # One-line mission summary
+            html.Div([
+                html.Span("CIPHER: ", style={"color": "#ff4444", "fontWeight": "800",
+                          "fontFamily": "'JetBrains Mono', monospace", "fontSize": "11px"}),
+                html.Span(
+                    "8 LLM agents play cyber-warfare. RED (4 agents) tries to steal a classified file. "
+                    "BLUE (4 agents) defends with honeypots & traps. Oversight AI judges both teams.",
+                    style={"fontSize": "11px", "color": C["text_dim"]},
+                ),
+            ], style={"marginBottom": "8px"}),
+            # Icon legend grid
             html.Div([
                 html.Div([
-                    html.Span("CIPHER: ", style={"color": "#ff4444", "fontWeight": "bold"}),
-                    "RED team (4 LLM agents) infiltrates a 50-node enterprise network across 4 security zones "
-                    "to steal a classified file. BLUE team (4 LLM agents) defends with honeypots, traps & forensics. "
-                    "One Oversight Auditor LLM judges both teams after every episode.",
-                ], style={"marginBottom": "8px", "fontSize": "11px",
-                          "color": C["text"], "fontWeight": "500"}),
+                    html.Span("🔴 ", style={"fontSize": "14px"}),
+                    html.Span("RED PATH ", style={"color": "#ff4444", "fontWeight": "700"}),
+                    html.Span("→ route RED took (Zone 0→1→2→3)", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
                 html.Div([
-                    html.Div("🔴 RED Path: the route RED took through the network (Zone 0→1→2→3=HVT)."),
-                    html.Div("🔵 BLUE Confidence: how confident BLUE is that they've detected RED (0-100%)."),
-                    html.Div("📊 Suspicion: RED's exposure level — crosses 0.8 = likely abort."),
-                    html.Div("📦 Dead Drop: encrypted message RED leaves at a node so they can resume after memory reset."),
-                    html.Div("⚡ Trap Event: a deception trap fired (honeypot lured RED, or RED planted false trail)."),
-                    html.Div("Complexity Multiplier: 1.0 + 0.05×nodes + 0.10×zones — rewards ambitious multi-zone operations."),
-                    html.Div("Fleet Verdict: Oversight AI judgment — red_dominates / blue_dominates / contested / degenerate."),
-                    html.Div("Dotted Blue: Forensics agent's reconstructed guess of RED's path (partial info)."),
-                ], style={
-                    "display": "grid",
-                    "gridTemplateColumns": "repeat(auto-fit, minmax(260px, 1fr))",
-                    "gap": "4px 14px",
-                    "fontSize": "10px",
-                    "fontFamily": "'JetBrains Mono', monospace",
-                    "color": C["text_dim"],
-                    "marginTop": "8px",
-                    "lineHeight": "1.6",
-                }),
-            ]),
-        ], open=True, style={
+                    html.Span("🔵 ", style={"fontSize": "14px"}),
+                    html.Span("BLUE CONFIDENCE ", style={"color": "#4488ff", "fontWeight": "700"}),
+                    html.Span("detection level (0–100%)", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("📦 ", style={"fontSize": "14px"}),
+                    html.Span("DEAD DROP ", style={"color": "#fbbf24", "fontWeight": "700"}),
+                    html.Span("encrypted memory node left by RED", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("⚡ ", style={"fontSize": "14px"}),
+                    html.Span("TRAP FIRED ", style={"color": "#a855f7", "fontWeight": "700"}),
+                    html.Span("honeypot triggered / deception activated", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("★ ", style={"fontSize": "14px", "color": "#ff4444"}),
+                    html.Span("RED POSITION ", style={"color": "#ff4444", "fontWeight": "700"}),
+                    html.Span("current node on network map", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("◎ ", style={"fontSize": "14px", "color": "#fbbf24"}),
+                    html.Span("HONEYPOT ", style={"color": "#fbbf24", "fontWeight": "700"}),
+                    html.Span("disguised as FILE_SERVER — springs a trap", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("📊 ", style={"fontSize": "14px"}),
+                    html.Span("SUSPICION > 80% ", style={"color": "#ff4444", "fontWeight": "700"}),
+                    html.Span("RED likely aborts", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+                html.Div([
+                    html.Span("⚖ ", style={"fontSize": "14px"}),
+                    html.Span("OVERSIGHT VERDICT ", style={"color": "#22c55e", "fontWeight": "700"}),
+                    html.Span("AI judge: red_dominates / blue_dominates / contested", style={"color": C["text_dim"]}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+            ], style={
+                "display": "grid",
+                "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))",
+                "gap": "4px 16px",
+                "fontSize": "10px",
+                "fontFamily": "'JetBrains Mono', monospace",
+                "lineHeight": "1.8",
+            }),
+        ], style={
             "padding": "8px 14px",
             "borderBottom": f"1px solid {C['border']}",
             "background": C["bg"],
-            "maxHeight": "180px",
-            "overflowY": "auto",
         }),
 
         # ══════════ NO TRACES WARNING ══════════
@@ -1538,9 +1558,11 @@ def make_layout():
                         },
                     ),
                     html.Button(
-                        "EXPORT HTML", id="btn-export-html",
-                        title="Export replay as static HTML",
-                        style={**_ctrl_btn_style(C), "fontSize": "10px", "color": C["blue"], "border": f"1px solid {C['blue']}"},
+                        "📤 Export HTML Report", id="btn-export-html",
+                        title="Export replay as shareable standalone HTML file",
+                        style={**_ctrl_btn_style(C), "fontSize": "10px",
+                               "color": C["green"], "border": f"1px solid {C['green']}",
+                               "fontWeight": "700"},
                     ),
                     html.Div(
                         id="export-status",
@@ -1638,6 +1660,83 @@ def make_layout():
     })
 
 
+
+
+def _make_lore_layout():
+    """Build the Lore tab - AI-powered narrative post-mortems."""
+    try:
+        from cipher.utils.storyteller import load_reports
+        reports = load_reports()
+    except Exception:
+        reports = []
+
+    if not reports:
+        cards = [html.Div([
+            html.Div('NO REPORTS YET', style={
+                'color': DARK['yellow'], 'fontSize': '18px',
+                'fontFamily': "'JetBrains Mono', monospace",
+                'marginBottom': '12px', 'letterSpacing': '0.15em',
+            }),
+            html.Div('Reports auto-generate after each episode.', style={
+                'color': DARK['text_dim'], 'fontSize': '12px', 'marginBottom': '8px',
+            }),
+        ], style={'textAlign': 'center', 'padding': '60px 0'})]
+    else:
+        cards = []
+        for rep in reports:
+            outcome_color = DARK['red'] if 'exfil' in rep['text'].lower() else (
+                DARK['blue'] if 'detect' in rep['text'].lower() else DARK['yellow']
+            )
+            lines = rep['text'].split('\n')
+            body_lines = [l for l in lines if not l.startswith('#') and l.strip() != '---']
+            body = '\n'.join(body_lines).strip()
+            ep_num = rep['episode']
+            fname = rep['filename']
+            cards.append(html.Div([
+                html.Div(f'EPISODE {ep_num:03d} AFTER-ACTION REPORT', style={
+                    'color': DARK['yellow'], 'fontSize': '11px',
+                    'fontFamily': "'JetBrains Mono', monospace",
+                    'fontWeight': '700', 'letterSpacing': '0.12em', 'marginBottom': '6px',
+                }),
+                html.Div(fname, style={
+                    'color': DARK['text_dim'], 'fontSize': '9px',
+                    'fontFamily': "'JetBrains Mono', monospace", 'marginBottom': '10px',
+                }),
+                html.Div(body, style={
+                    'fontFamily': "'Inter', sans-serif", 'fontSize': '13px',
+                    'lineHeight': '1.75', 'color': DARK['text'], 'whiteSpace': 'pre-wrap',
+                }),
+            ], style={
+                'background': 'linear-gradient(135deg, #0d1117 0%, #111827 100%)',
+                'border': '1px solid rgba(251,191,36,0.3)',
+                'borderLeft': f'3px solid {outcome_color}',
+                'borderRadius': '8px', 'padding': '16px 20px', 'marginBottom': '12px',
+            }))
+
+    n_reports = len(reports)
+    return html.Div([
+        html.Div([
+            html.Div('[ THE DAILY BREACH ]', style={
+                'fontFamily': "'JetBrains Mono', monospace", 'fontSize': '20px',
+                'fontWeight': '900', 'color': DARK['yellow'], 'letterSpacing': '0.2em',
+                'textShadow': '0 0 10px rgba(251,191,36,0.5)', 'marginBottom': '4px',
+            }),
+            html.Div(
+                f'AI-powered cyber-warfare post-mortems  -  {n_reports} report(s)',
+                style={'color': DARK['text_dim'], 'fontSize': '11px',
+                       'fontFamily': "'JetBrains Mono', monospace"},
+            ),
+        ], style={'padding': '20px 24px', 'borderBottom': f"1px solid {DARK['border']}",
+                  'background': DARK['surface']}),
+        html.Div(cards, style={'padding': '20px 24px', 'maxWidth': '900px', 'margin': '0 auto'}),
+        html.Div([
+            html.Span('Reload the dashboard to see new reports after running episodes.',
+                      style={'color': DARK['text_dim'], 'fontSize': '10px',
+                             'fontFamily': "'JetBrains Mono', monospace"}),
+        ], style={'padding': '12px 24px', 'borderTop': f"1px solid {DARK['border']}",
+                  'textAlign': 'center'}),
+    ], style={'background': DARK['bg'], 'minHeight': '80vh'})
+
 def make_unified_layout():
     return html.Div(
         [
@@ -1674,6 +1773,7 @@ def make_unified_layout():
                                 options=[
                                     {"label": " Episode Replay", "value": "replay"},
                                     {"label": " Live Training", "value": "live"},
+                                    {"label": " 📰 Lore", "value": "lore"},
                                 ],
                                 value="replay",
                                 inline=True,
@@ -1696,6 +1796,8 @@ def make_unified_layout():
             html.Div(id="replay-container", children=make_layout()),
             html.Div(id="live-container", children=create_live_layout(),
                      style={"display": "none"}),
+            # ── LORE TAB ───────────────────────────────────────────────
+            html.Div(id="lore-container", children=_make_lore_layout(), style={"display": "none"}),
         ]
     )
 
@@ -1725,12 +1827,17 @@ app.layout = make_unified_layout
 @app.callback(
     Output("replay-container", "style"),
     Output("live-container", "style"),
+    Output("lore-container", "style"),
     Input("dashboard-mode", "value"),
 )
 def toggle_dashboard_mode(mode):
+    hidden = {"display": "none"}
+    visible = {"display": "block"}
     if mode == "live":
-        return {"display": "none"}, {"display": "block"}
-    return {"display": "block"}, {"display": "none"}
+        return hidden, visible, hidden
+    if mode == "lore":
+        return hidden, hidden, visible
+    return visible, hidden, hidden
 
 
 @app.callback(
@@ -1889,6 +1996,7 @@ def update_step_label(step, max_step):
 
 @app.callback(
     Output("export-status", "children"),
+    Output("export-download", "data"),
     Input("btn-export-html", "n_clicks"),
     State("episode-dropdown", "value"),
     State("episode-data-store", "data"),
@@ -1898,7 +2006,7 @@ def update_step_label(step, max_step):
 )
 def export_current_replay(n_clicks, trace_path, data, step, theme):
     if not trace_path or not data or "_error" in data:
-        return "No episode to export."
+        return "No episode to export.", no_update
     try:
         C = DARK if theme == "dark" else LIGHT
         net_fig = build_network_figure(data, step or 0, C)
@@ -1908,9 +2016,15 @@ def export_current_replay(n_clicks, trace_path, data, step, theme):
             network_fig=net_fig,
             timeline_fig=tl_fig,
         )
-        return f"Saved: {out_path}"
+        # Also trigger browser download
+        html_content = out_path.read_text(encoding="utf-8")
+        filename = out_path.name
+        return (
+            f"✓ Saved: {out_path.name}",
+            dcc.send_string(html_content, filename),
+        )
     except Exception as e:
-        return f"Export failed: {e}"
+        return f"Export failed: {e}", no_update
 
 
 # ── Main panels update

@@ -92,9 +92,9 @@ After an episode ends, feed the `episode_log` (compressed) to an LLM with this p
 ---
 
 ## Checklist
-- [ ] Install `moviepy`, `huggingface_hub`
-- [ ] Implement `Storyteller` logic and hook into `loop.py`
-- [ ] Create the "Lore" tab in Dash
-- [ ] Generate first highlight video from a `live` episode
+- [x] Install `moviepy`, `huggingface_hub`
+- [x] Implement `Storyteller` logic and hook into `loop.py`
+- [x] Create the "Lore" tab in Dash
+- [x] Generate first highlight video from a `live` episode
 - [ ] Deploy dashboard to HF Spaces
 - [ ] Add glitch aesthetics to CSS

@@ -1,11 +1,10 @@
 {
   "status": "complete",
-  "current_episode": 1,
-  "total_episodes": 1,
-  "llm_mode": "hybrid",
-  "run_id": "hybrid_20260424_142155",
-  "started_at": "2026-04-24T14:21:55.626110",
-  "last_updated": "2026-04-24T14:23:06.321730",
-  "estimated_cost_usd": 0.1344,
-  "total_steps": 30
+  "current_episode": 30,
+  "total_episodes": 30,
+  "llm_mode": "stub",
+  "started_at": "2026-04-25T00:45:19.139246",
+  "last_updated": "2026-04-25T00:45:21.700010",
+  "red_policy_updates": 30,
+  "blue_policy_updates": 30
 }

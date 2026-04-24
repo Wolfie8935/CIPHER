@@ -1,0 +1,363 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   CIPHER Dashboard — Cyberpunk Aesthetic CSS
+   custom.css — Glitch animations, CRT scanlines, neon Cyberpunk palette
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Google Font import ─────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
+
+/* ── CSS Custom Properties (Cyberpunk Palette) ──────────────────────────── */
+:root {
+  --neon-red:    #ff2244;
+  --neon-blue:   #00aaff;
+  --neon-green:  #00ff88;
+  --neon-yellow: #ffdd00;
+  --neon-purple: #bb44ff;
+  --neon-cyan:   #00ffdd;
+  --deep-black:  #010409;
+  --dark-bg:     #030712;
+  --card-bg:     #0d1117;
+  --border-dim:  #1e293b;
+  --border-glow: rgba(255,34,68,0.4);
+  --text-main:   #e2e8f0;
+  --text-dim:    #64748b;
+}
+
+/* ── Global Body ────────────────────────────────────────────────────────── */
+body {
+  background: var(--deep-black) !important;
+  color: var(--text-main) !important;
+  font-family: 'Inter', sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLITCH ANIMATION — Mode Badge in LIVE mode
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes glitch-skew {
+  0%   { transform: skew(0deg); }
+  5%   { transform: skew(-2deg) scaleX(1.02); }
+  10%  { transform: skew(0deg); }
+  85%  { transform: skew(0deg); }
+  90%  { transform: skew(1.5deg) scaleX(0.99); }
+  95%  { transform: skew(-1deg); }
+  100% { transform: skew(0deg); }
+}
+
+@keyframes glitch-clip-1 {
+  0%   { clip-path: inset(0 0 100% 0); opacity: 0; }
+  20%  { clip-path: inset(10% 0 60% 0); opacity: 0.8; transform: translate(-3px, 0); }
+  40%  { clip-path: inset(50% 0 20% 0); opacity: 0.7; transform: translate(3px, 0); }
+  60%  { clip-path: inset(30% 0 50% 0); opacity: 0.9; transform: translate(-2px, 0); }
+  80%  { clip-path: inset(70% 0 10% 0); opacity: 0.6; transform: translate(2px, 0); }
+  100% { clip-path: inset(0 0 100% 0); opacity: 0; }
+}
+
+@keyframes glitch-clip-2 {
+  0%   { clip-path: inset(0 0 100% 0); opacity: 0; }
+  20%  { clip-path: inset(60% 0 20% 0); opacity: 0.7; transform: translate(4px, 0); }
+  40%  { clip-path: inset(20% 0 55% 0); opacity: 0.6; transform: translate(-4px, 0); }
+  60%  { clip-path: inset(75% 0 5% 0);  opacity: 0.8; transform: translate(2px, 0); }
+  80%  { clip-path: inset(5% 0 75% 0);  opacity: 0.5; transform: translate(-2px, 0); }
+  100% { clip-path: inset(0 0 100% 0); opacity: 0; }
+}
+
+@keyframes neon-flicker {
+  0%   { opacity: 1; }
+  5%   { opacity: 0.8; }
+  10%  { opacity: 1; }
+  15%  { opacity: 0.9; }
+  20%  { opacity: 1; }
+  50%  { opacity: 1; }
+  52%  { opacity: 0.7; }
+  54%  { opacity: 1; }
+  80%  { opacity: 1; }
+  82%  { opacity: 0.85; }
+  84%  { opacity: 1; }
+}
+
+@keyframes border-pulse {
+  0%   { box-shadow: 0 0 4px var(--neon-red), 0 0 8px var(--neon-red); }
+  50%  { box-shadow: 0 0 10px var(--neon-red), 0 0 20px var(--neon-red), 0 0 40px rgba(255,34,68,0.3); }
+  100% { box-shadow: 0 0 4px var(--neon-red), 0 0 8px var(--neon-red); }
+}
+
+@keyframes scanline-sweep {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+/* ── LIVE Mode Badge Glitch ──────────────────────────────────────────────── */
+#mode-badge {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+/* Apply glitch when badge contains "LIVE" text — via data attribute or class */
+#mode-badge[data-mode="live"],
+#mode-badge.live-mode {
+  animation:
+    glitch-skew 4s infinite linear,
+    neon-flicker 3s infinite,
+    border-pulse 2s infinite ease-in-out !important;
+  color: var(--neon-green) !important;
+  border-color: var(--neon-green) !important;
+  text-shadow:
+    0 0 8px var(--neon-green),
+    0 0 16px rgba(0,255,136,0.5);
+  letter-spacing: 0.2em;
+}
+
+#mode-badge[data-mode="live"]::before,
+#mode-badge[data-mode="live"]::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: inherit;
+  padding: inherit;
+}
+
+#mode-badge[data-mode="live"]::before {
+  color: var(--neon-red);
+  animation: glitch-clip-1 5s infinite;
+  text-shadow: -2px 0 var(--neon-red);
+}
+
+#mode-badge[data-mode="live"]::after {
+  color: var(--neon-blue);
+  animation: glitch-clip-2 5s infinite 0.5s;
+  text-shadow: 2px 0 var(--neon-blue);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CRT SCANLINES + VIGNETTE on Network Graph
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes crt-flicker {
+  0%   { opacity: 0.96; }
+  25%  { opacity: 1; }
+  50%  { opacity: 0.97; }
+  75%  { opacity: 1; }
+  100% { opacity: 0.96; }
+}
+
+/* Wrap the network graph container */
+#network-graph,
+.js-plotly-plot {
+  position: relative;
+}
+
+/* CRT scanline pseudo-overlay via wrapper div */
+.crt-wrap {
+  position: relative;
+  overflow: hidden;
+  animation: crt-flicker 0.15s infinite;
+}
+
+.crt-wrap::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0, 0, 0, 0.12) 3px,
+    rgba(0, 0, 0, 0.12) 4px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+.crt-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 60%,
+    rgba(0,0,0,0.45) 100%
+  );
+  pointer-events: none;
+  z-index: 11;
+}
+
+/* ── Subtle CRT on the entire main content ──────────────────────────────── */
+#main-grid {
+  position: relative;
+}
+
+#main-grid::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 5px,
+    rgba(0,0,0,0.03) 5px,
+    rgba(0,0,0,0.03) 6px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CYBERPUNK NEON PANEL BORDERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes neon-border-drift {
+  0%   { border-color: rgba(255,34,68,0.5); box-shadow: 0 0 6px rgba(255,34,68,0.2); }
+  33%  { border-color: rgba(0,170,255,0.5); box-shadow: 0 0 6px rgba(0,170,255,0.2); }
+  66%  { border-color: rgba(187,68,255,0.5); box-shadow: 0 0 6px rgba(187,68,255,0.2); }
+  100% { border-color: rgba(255,34,68,0.5); box-shadow: 0 0 6px rgba(255,34,68,0.2); }
+}
+
+/* Panel hover — neon glow on any surface panel */
+.panel-surface:hover,
+[style*="border-radius: 8px"]:hover {
+  transition: box-shadow 0.3s ease;
+  box-shadow: 0 0 12px rgba(255,34,68,0.15), 0 0 24px rgba(0,170,255,0.1) !important;
+}
+
+/* ── Action log rows — color-coded flash on RED / BLUE ───────────────────── */
+@keyframes row-flash-red {
+  0%   { background: rgba(255,34,68,0.15); }
+  100% { background: transparent; }
+}
+
+@keyframes row-flash-blue {
+  0%   { background: rgba(0,170,255,0.15); }
+  100% { background: transparent; }
+}
+
+.action-row-red  { animation: row-flash-red 1.5s ease-out; }
+.action-row-blue { animation: row-flash-blue 1.5s ease-out; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CIPHER LOGO — Neon pulse on top bar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes logo-pulse {
+  0%   { text-shadow: 0 0 6px #ff2244, 0 0 12px rgba(255,34,68,0.4); }
+  50%  { text-shadow: 0 0 12px #ff2244, 0 0 24px rgba(255,34,68,0.7), 0 0 40px rgba(255,34,68,0.3); }
+  100% { text-shadow: 0 0 6px #ff2244, 0 0 12px rgba(255,34,68,0.4); }
+}
+
+#top-bar span[style*="22px"] {
+  animation: logo-pulse 3s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LORE TAB — Styled narrative card
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.lore-report-card {
+  background: linear-gradient(135deg, #0d1117 0%, #111827 100%);
+  border: 1px solid rgba(255,221,0,0.3);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.lore-report-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 3px; height: 100%;
+  background: linear-gradient(to bottom, var(--neon-yellow), var(--neon-red));
+}
+
+.lore-report-card:hover {
+  border-color: rgba(255,221,0,0.6);
+  box-shadow: 0 0 16px rgba(255,221,0,0.15);
+}
+
+.lore-report-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--neon-yellow);
+  letter-spacing: 0.12em;
+  margin-bottom: 8px;
+}
+
+.lore-report-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.lore-report-body {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-main);
+  white-space: pre-wrap;
+}
+
+/* ── Typing cursor for lore tab ──────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.typing-cursor::after {
+  content: "█";
+  color: var(--neon-green);
+  animation: blink 1s step-end infinite;
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCROLLBAR — Neon styling
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #010409; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, var(--neon-red), var(--neon-purple));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neon-cyan);
+}
+
+/* ── Tab navigation ──────────────────────────────────────────────────────── */
+.tab-btn {
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  padding: 6px 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  border-color: var(--neon-red);
+  color: var(--neon-red);
+  box-shadow: 0 0 8px rgba(255,34,68,0.3);
+}
+
+.tab-btn.active {
+  background: rgba(255,34,68,0.1);
+  border-color: var(--neon-red);
+  color: var(--neon-red);
+  box-shadow: 0 0 12px rgba(255,34,68,0.4);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */

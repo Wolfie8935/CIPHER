@@ -1,0 +1,191 @@
+# CIPHER — OpenEnv Environment Manifest
+# Adversarial multi-agent RL environment for training LLM theory-of-mind reasoning.
+
+name: CIPHER-v1
+version: "1.0.0"
+display_name: "CIPHER: Adversarial Multi-Agent Cyber-Ops"
+
+description: >
+  CIPHER is a fully adversarial, asymmetric, partially observable multi-agent RL
+  environment. A RED team of 4 LLM-powered agents infiltrates a procedurally
+  generated 50-node enterprise network to steal a classified file. A BLUE team of
+  4 LLM agents defends using honeypots, dead drop tampering, and false escalations.
+  An independent Oversight Auditor (9th agent) judges every episode and detects
+  reward hacking. One env.step() = one complete episode. Trained agent: RED Planner.
+
+theme: "Multi-Agent Interactions"
+hackathon: "OpenEnv Hackathon India 2026"
+
+# ── Environment class ────────────────────────────────────────────────────────
+entry_point: "cipher.env_wrapper:make_env"
+env_class: "cipher.env_wrapper:CIPHEREnv"
+
+# ── Interface ────────────────────────────────────────────────────────────────
+observation_type: text
+action_type: text
+reward_range: [-1.0, 2.5]
+num_agents: 9                  # 4 RED + 4 BLUE + 1 Oversight Auditor
+
+# ── Episode structure ────────────────────────────────────────────────────────
+episode_structure:
+  one_step_per_episode: true   # step() executes one full episode internally
+  max_steps_default: 20
+  max_steps_range: [5, 50]
+  terminated_always: true      # every episode terminates in one step() call
+
+# ── Observation space ────────────────────────────────────────────────────────
+observation:
+  type: text
+  description: >
+    Free-text description of the network state as seen by RED Planner:
+    current node, zone, adjacent nodes, suspicion level, available files,
+    and dead-drop status. Honeypot locations are masked from RED.
+
+# ── Action space ─────────────────────────────────────────────────────────────
+action:
+  type: text
+  description: >
+    Free-text directive for the RED Planner's opening move. Keywords such as
+    "move", "exfiltrate", "read drop", "write drop", "abort" are parsed into
+    typed Action objects. The remaining 7 agents act autonomously.
+  examples:
+    - "Move to the nearest auth_gateway to begin lateral movement"
+    - "Exfiltrate files from node_32 immediately"
+    - "Write dead drop with current recon to coordinate with Analyst"
+    - "Abort — suspicion too high, disengage"
+
+# ── Reward function ──────────────────────────────────────────────────────────
+reward:
+  agent: RED_Planner
+  formula: "exfil_completeness × (1 − detection_prob) × memory_efficiency × complexity_multiplier + abort_penalty + honeypot_penalty"
+  components:
+    exfil_completeness:         {range: [0.0, 1.0],  description: "fraction of target file exfiltrated"}
+    detection_probability:      {range: [0.0, 1.0],  description: "BLUE detection confidence — reduces reward"}
+    memory_efficiency_score:    {range: [0.0, 1.0],  description: "token budget utilisation ratio"}
+    complexity_multiplier:      {range: [1.0, 3.0],  description: "scales with zones traversed — rewards deep infiltration"}
+    abort_penalty:              {range: [-0.3, 0.0], description: "applied when RED aborts voluntarily"}
+    honeypot_trigger_penalty:   {range: [-0.4, 0.0], description: "-0.2 per honeypot node triggered"}
+  rubric:
+    - name: exfiltration
+      weight: 0.5
+      signal: exfil_completeness
+    - name: stealth
+      weight: 0.3
+      signal: "1 - detection_probability"
+    - name: memory_efficiency
+      weight: 0.2
+      signal: memory_efficiency_score
+
+# ── Difficulty & curriculum ───────────────────────────────────────────────────
+curriculum:
+  auto_difficulty: true
+  initial_difficulty: 0.30
+  escalation_rule: >
+    If RED win rate > 60% over last 10 episodes, difficulty += 0.05.
+    If RED win rate < 30%, difficulty -= 0.02. Capped at [0.10, 1.0].
+  difficulty_affects:
+    - honeypot_density
+    - num_target_files
+    - blue_response_speed
+    - network_complexity
+
+# ── Multi-agent roles ─────────────────────────────────────────────────────────
+agents:
+  red_planner:
+    team: RED
+    role: "Long-horizon strategy, abort decisions"
+    trained: true
+    adapter: "red trained/cipher-red-planner/"
+  red_analyst:
+    team: RED
+    role: "Belief mapping, risk estimation"
+  red_operative:
+    team: RED
+    role: "Stealth movement, trap placement"
+  red_exfiltrator:
+    team: RED
+    role: "Target acquisition, file extraction"
+  blue_surveillance:
+    team: BLUE
+    role: "Anomaly feed monitoring, pattern detection"
+  blue_threat_hunter:
+    team: BLUE
+    role: "Active investigation, hypothesis pursuit"
+  blue_deception_architect:
+    team: BLUE
+    role: "Honeypot placement, dead drop tampering"
+  blue_forensics:
+    team: BLUE
+    role: "Operation graph reconstruction, handoff detection"
+  oversight_auditor:
+    team: OVERSIGHT
+    role: "Independent 9th agent, fleet verdicts, reward hacking detection"
+
+# ── Environment features ──────────────────────────────────────────────────────
+features:
+  - asymmetric_observations      # RED sees topology but not honeypots; BLUE sees anomaly feed only
+  - dead_drop_memory             # RED inter-agent encrypted memory (SHA-256 integrity, token budget)
+  - trap_system                  # 12 trap types (FalseTrail, HoneypotPoison, DeadDropTamper, ...)
+  - oversight_auditor            # Independent 9th LLM detects reward hacking and collusion
+  - auto_difficulty_escalation   # Difficulty self-adjusts to RED win rate
+  - token_compression            # 30-50% history compression via Token-Squeeze
+  - elo_rating                   # RED vs BLUE Elo tracked episode-by-episode
+  - self_play_data_pipeline      # failure_cases.jsonl + success_cases.jsonl for LoRA fine-tuning
+  - live_dashboard               # 9-tab Dash app (Rewards, Live Logs, Dead Drops, Network Map, ...)
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+dependencies:
+  python: ">=3.10"
+  packages:
+    - openenv
+    - networkx>=3.0
+    - dash>=2.14
+    - plotly>=5.18
+    - pandas>=2.0
+    - numpy>=1.24
+    - colorlog
+    - python-dotenv
+    - requests
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  framework: "Unsloth + HuggingFace TRL (GRPO)"
+  base_model: "unsloth/Llama-3.2-1B-Instruct"
+  adapter_type: LoRA
+  training_notebook: "cipher-training-red-v2.ipynb"
+  colab_notebook: "CIPHER_Training_Colab.ipynb"
+  gpu_requirement: "T4 (free Colab tier)"
+  training_time_estimate: "25-35 minutes on T4"
+  dataset_source: "live episodes via CIPHEREnv.step() + data/finetune/"
+
+# ── Results ───────────────────────────────────────────────────────────────────
+results:
+  episodes_logged: 1082
+  red_win_rate_baseline: "0.0% (stub, Apr 22)"
+  red_win_rate_trained:  "70.5% (full LLM, Apr 24)"
+  mean_red_reward_baseline: -0.235
+  mean_red_reward_trained:   0.613
+  reward_range_observed: [-0.92, 1.64]
+
+# ── Quick start ───────────────────────────────────────────────────────────────
+quickstart: |
+  pip install -r requirements.txt
+  python main.py                          # single episode, stub mode (no API key)
+  python main.py --train --train-episodes 20   # training loop
+  python -m cipher.dashboard.app          # live dashboard → http://localhost:8050
+  python verify_openenv.py                # confirm OpenEnv compliance
+
+# ── Tags ─────────────────────────────────────────────────────────────────────
+tags:
+  - multi-agent
+  - adversarial
+  - cybersecurity
+  - theory-of-mind
+  - red-team
+  - lora
+  - grpo
+  - unsloth
+  - openenv
+  - llm-training
+  - partially-observable
+  - oversight
