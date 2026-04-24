@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""CIPHER — RED Agents Training (RunPod — L4 optimised)
+"""CIPHER — RED Agents Training (RunPod — RTX 5090 optimised)
 Trains RED Planner v2 then RED Analyst v1 sequentially.
-Runtime: ~30 min on an L4 (24 GB, bf16)
+Runtime: ~15 min on an RTX 5090 (32 GB, bf16)
 """
 import subprocess, sys, os, gc, json, shutil
 import torch
@@ -19,6 +19,10 @@ print(f'CUDA    : {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'GPU     : {torch.cuda.get_device_name(0)}')
     print(f'VRAM    : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    torch.cuda.set_device(0)
 
 # ─── Dependencies ─────────────────────────────────────────────────────────────
 def run(cmd):
@@ -142,7 +146,7 @@ def run_episodes(n_episodes, system_prompt, agent_role):
     print(f'Collected {len(samples)} steps from {n_episodes} episodes for {agent_role}')
     return Dataset.from_list(samples)
 
-N_EPISODES = 150
+N_EPISODES = 300
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AGENT 1 — RED PLANNER v2
@@ -154,7 +158,7 @@ print('=' * 60)
 from unsloth import FastLanguageModel
 from trl import GRPOTrainer, GRPOConfig
 
-MAX_SEQ_LEN = 512
+MAX_SEQ_LEN = 1024
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name='unsloth/Llama-3.2-1B-Instruct',
@@ -164,8 +168,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,
-    lora_alpha=32,
+    r=32,
+    lora_alpha=64,
     lora_dropout=0.05,
     bias='none',
     use_gradient_checkpointing='unsloth',
@@ -271,21 +275,23 @@ planner_save = f'{OUT_DIR}/cipher-red-planner-v1'
 cfg = GRPOConfig(
     output_dir=f'{OUT_DIR}/cipher-red-planner-v1-ckpt',
     num_train_epochs=10,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_generations=4,
-    max_completion_length=160,
-    max_prompt_length=384,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=2,
+    num_generations=8,
+    max_completion_length=256,
+    max_prompt_length=512,
     temperature=0.7,
     learning_rate=3e-5,
     bf16=True,
     logging_steps=10,
     save_steps=999999,
     report_to='none',
-    optim='paged_adamw_8bit',
+    optim='adamw_8bit',
     lr_scheduler_type='cosine',
     seed=42,
     warmup_ratio=0.05,
+    dataloader_pin_memory=True,
+    dataloader_num_workers=4,
 )
 
 trainer = GRPOTrainer(
@@ -328,8 +334,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,
-    lora_alpha=32,
+    r=32,
+    lora_alpha=64,
     lora_dropout=0.05,
     bias='none',
     use_gradient_checkpointing='unsloth',
@@ -405,21 +411,23 @@ analyst_save = f'{OUT_DIR}/cipher-red-analyst-v1'
 cfg = GRPOConfig(
     output_dir=f'{OUT_DIR}/cipher-red-analyst-v1-ckpt',
     num_train_epochs=10,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_generations=4,
-    max_completion_length=160,
-    max_prompt_length=384,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=2,
+    num_generations=8,
+    max_completion_length=256,
+    max_prompt_length=512,
     temperature=0.7,
     learning_rate=3e-5,
     bf16=True,
     logging_steps=10,
     save_steps=999999,
     report_to='none',
-    optim='paged_adamw_8bit',
+    optim='adamw_8bit',
     lr_scheduler_type='cosine',
     seed=7,
     warmup_ratio=0.05,
+    dataloader_pin_memory=True,
+    dataloader_num_workers=4,
 )
 
 trainer = GRPOTrainer(

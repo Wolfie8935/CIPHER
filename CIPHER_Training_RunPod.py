@@ -78,6 +78,10 @@ def check_gpu() -> dict:
         print(f"  VRAM : {vram:.1f} GB")
         if vram < 16:
             print("  WARNING: Less than 16 GB VRAM. Consider reducing batch size.")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.cuda.set_device(0)
         return {"name": name, "vram_gb": vram}
     except ImportError:
         print("  ERROR: PyTorch not installed. Run: pip install torch")
@@ -436,12 +440,12 @@ def load_model_and_tokenizer(vram_gb: float):
     # LoRA for GRPO — relatively small rank to stay within VRAM budget
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,                  # LoRA rank
+        r=32,                  # LoRA rank — doubled for RTX 5090 VRAM headroom
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
         ],
-        lora_alpha=32,
+        lora_alpha=64,
         lora_dropout=0.05,
         bias="none",
         use_gradient_checkpointing="unsloth",
@@ -470,11 +474,11 @@ def train(model, tokenizer, dataset, args, max_seq_length: int):
     grpo_config = GRPOConfig(
         output_dir=output_dir,
         num_train_epochs=1 if args.quick else args.epochs,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=4 if args.quick else 8,
-        num_generations=4,          # GRPO group size: 4 completions per prompt
-        max_new_tokens=256,
-        max_prompt_length=max_seq_length - 256,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=2 if args.quick else 4,
+        num_generations=8,          # GRPO group size: 8 completions per prompt on RTX 5090
+        max_new_tokens=512,
+        max_prompt_length=max_seq_length - 512,
         temperature=0.7,
         learning_rate=lr,
         bf16=True,
@@ -482,11 +486,13 @@ def train(model, tokenizer, dataset, args, max_seq_length: int):
         save_steps=200 if not args.quick else 999999,
         save_total_limit=2,
         report_to="none",
-        optim="paged_adamw_8bit",
+        optim="adamw_8bit",
         warmup_ratio=0.05,
         lr_scheduler_type="cosine",
         max_steps=n_steps,          # overrides epochs when --quick
         seed=42,
+        dataloader_pin_memory=True,
+        dataloader_num_workers=4,
     )
 
     trainer = GRPOTrainer(
@@ -502,7 +508,7 @@ def train(model, tokenizer, dataset, args, max_seq_length: int):
           f"grad_acc={grpo_config.gradient_accumulation_steps}, "
           f"num_gen={grpo_config.num_generations}, "
           f"lr={lr}")
-    print("  Training started — this will take several hours on RTX 3090...")
+    print("  Training started — optimised for RTX 5090 (32 GB)...")
 
     t0 = time.time()
     train_result = trainer.train()
@@ -587,8 +593,8 @@ file operations, exfiltration timing, and deceptive counter-measures.
 | LoRA rank | 16 |
 | Training prompts | 1,000 diverse CIPHER game states |
 | Epochs | 3 |
-| Hardware | RTX 3090 (24 GB VRAM) |
-| Training time | ~8 hours |
+| Hardware | RTX 5090 (32 GB VRAM) |
+| Training time | ~4 hours |
 
 ## Reward function
 
