@@ -225,7 +225,7 @@ class BaseAgent(ABC):
 
     # Maps (team, role) → (env_var, default_adapter_path) for LoRA specialists
     _LORA_PATH_MAP: dict = {
-        ("red", "planner"):        ("RED_PLANNER_LORA_PATH",       os.path.join("red trained", "cipher-red-planner-v2")),
+        ("red", "planner"):        ("RED_PLANNER_LORA_PATH",       os.path.join("red trained", "cipher-red-planner-v1")),
         ("red", "analyst"):        ("RED_ANALYST_LORA_PATH",        os.path.join("red trained", "cipher-red-analyst-v1")),
         ("blue", "surveillance"):  ("BLUE_SURVEILLANCE_LORA_PATH",  os.path.join("blue trained", "cipher-blue-surveillance-v1")),
         ("blue", "threat_hunter"): ("BLUE_THREAT_HUNTER_LORA_PATH", os.path.join("blue trained", "cipher-blue-threat-hunter-v1")),
