@@ -79,7 +79,8 @@ class LLMClient:
             )
 
         elif self.backend == "hybrid":
-            # RED Planner uses the trained local model; everyone else uses NVIDIA NIM.
+            # RED Planner uses the trained local LoRA model loaded directly from disk.
+            # Other agents use NVIDIA NIM. No local server (LM Studio/vLLM) required.
             _extra_headers = {}
             if "openrouter" in config.nvidia_base_url:
                 _extra_headers = {
@@ -92,10 +93,10 @@ class LLMClient:
                 timeout=self.REQUEST_TIMEOUT,
                 default_headers=_extra_headers if _extra_headers else None,
             )
-            self._local = OpenAI(
-                base_url=config.local_model_url,
-                api_key="local",
-                timeout=self.REQUEST_TIMEOUT,
+            self._local = None  # LoRAClient loads from disk; no local server needed
+            import os as _os
+            self._lora_adapter_path = _os.getenv(
+                "RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v3"
             )
 
         else:
@@ -107,7 +108,7 @@ class LLMClient:
         logger.info(f"LLMClient initialized: backend={self.backend}")
         if self.backend == "hybrid":
             logger.info(
-                f"Hybrid routing: {_LOCAL_KEYS_IN_HYBRID} -> LOCAL ({config.local_model_url}), "
+                f"Hybrid routing: {_LOCAL_KEYS_IN_HYBRID} -> LoRA ({self._lora_adapter_path}), "
                 "all other agents -> NVIDIA/OpenRouter."
             )
 
@@ -135,6 +136,10 @@ class LLMClient:
         Returns:
             Model response as string. Never raises — returns fallback WAIT/STAND_DOWN on failure.
         """
+        # In hybrid mode, specialist keys use the LoRA model directly — no local server needed.
+        if self.backend == "hybrid" and model_env_key.lower() in _LOCAL_KEYS_IN_HYBRID:
+            return self._lora_complete(messages, team=team, max_tokens=max_tokens, temperature=temperature)
+
         client, model_name = self._resolve(model_env_key)
         if client is None or model_name is None:
             logger.error(f"Cannot resolve client/model for key '{model_env_key}'.")
@@ -218,6 +223,22 @@ class LLMClient:
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
 
+    def _lora_complete(self, messages: list[dict[str, str]], team: str = "red",
+                       max_tokens: int = 256, temperature: float = 0.7) -> str:
+        """Run inference via LoRAClient (loads adapter from disk, no server required)."""
+        try:
+            from cipher.utils.lora_client import LoRAClient
+            lora = LoRAClient()
+            return lora.complete(
+                messages,
+                adapter_path=self._lora_adapter_path,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as e:
+            logger.error(f"LoRA inference failed: {e}")
+            return self._fallback_action(team)
+
     def _resolve(self, model_env_key: str) -> tuple[OpenAI | None, str | None]:
         """Return (client, model_name) for the given model key and current backend."""
         key = model_env_key.lower()
@@ -230,8 +251,8 @@ class LLMClient:
             return self._local, config.local_model_name
 
         elif self.backend == "hybrid":
-            if key in _LOCAL_KEYS_IN_HYBRID:
-                return self._local, config.local_model_name
+            # Local keys are handled by _lora_complete() before _resolve() is called;
+            # this branch is only reached for NIM-routed agents.
             model_name = getattr(config, key, None)
             return self._nvidia, model_name
 
