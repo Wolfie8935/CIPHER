@@ -1,6 +1,6 @@
 # CIPHER — Architecture & Build Status
 
-> Last updated: Phase 13 complete (unified dashboard modes + training event/state outputs)
+> Last updated: Phase D complete (Token-Squeeze · Elo Analytics · Self-Play Pipeline · Winning Metrics)
 
 ## Build Status
 
@@ -24,6 +24,7 @@ flowchart TD
     P11["🔵 Phase 11\nEvaluation Suite\nBaseline comparison"]:::next
     P12["✅ Phase 12\nEpisode Replay\nDashboard"]:::done
     P13["✅ Phase 13\nLive Dashboard\nReal-time training viz"]:::done
+    PD["✅ Phase D\nNeural Engine\nToken-Squeeze · Elo · Self-Play"]:::done
     P14["⬜ Phase 14\nHuggingFace\nNOT STARTED — awaiting credits"]:::future
     P15["⬜ Phase 15\nPolish & Demo\nPitch preparation"]:::future
 
@@ -93,8 +94,15 @@ flowchart TB
     end
 
     subgraph DASHBOARD["📺 Dashboard (Unified App)"]
-        D12["Replay Mode — Phase 12 ✅\nTrace playback + timeline + network map"]
-        D13["Live Training Mode — Phase 13 ✅\nLive rewards + events + oversight feed"]
+        D12["Replay Mode — Phase 12 ✅\nTrace playback + timeline + network map\nWinning Metrics banner"]
+        D13["Live Training Mode — Phase 13/14 ✅\nLive rewards + events + oversight feed\n9 tabs — Analytics ★ tab: Elo · Heatmap · Curves"]
+    end
+
+    subgraph ANALYTICS["📊 Analytics Engine — Phase D ✅"]
+        ELO["Elo Rating System\nRED vs BLUE episode-by-episode"]
+        HEAT["Detection Heatmap\n50-node death trap visualization"]
+        PIPE["Self-Play Pipeline\nfailure_cases.jsonl + success_cases.jsonl"]
+        COMPRESS["Token-Squeeze\n30-50% token reduction via history compression"]
     end
 
     subgraph LLM["🤖 LLM Backend — Phase 3 ✅"]

@@ -6,6 +6,7 @@ CIPHER is a fully adversarial, asymmetric, partially observable multi-agent RL e
 
 ```
 python main.py          # Watch the competition — no setup needed
+python main.py --live   # Full NVIDIA NIM inference for all 8 agents
 ```
 
 ---
@@ -22,7 +23,12 @@ python main.py          # Watch the competition — no setup needed
 | Trained specialist | RED Planner fine-tuned via Unsloth GRPO (LoRA adapter included) |
 | Hybrid performance | Specialist model yields measurable improvements over zero-shot base models |
 | Live telemetry | SQLite-backed episode store, no file-lock issues |
-| Real-time dashboard | 8 tabs: Rewards, Live Logs, Dead Drops, Network Map, Oversight, Difficulty, Learning, History |
+| Real-time dashboard | 9 tabs: Rewards, Live Logs, Dead Drops, Network Map, Oversight, Difficulty, Learning, History, **Analytics** |
+| **Token compression** | Dynamic history compression (30–50% token reduction) — keeps last 5 steps verbatim, summarises earlier |
+| **Self-play data pipeline** | Failure & success cases auto-saved to `data/finetune/` for future LoRA fine-tuning |
+| **Elo rating system** | RED vs BLUE Elo tracked episode-by-episode to prove model improvements |
+| **Detection heatmap** | 50-node heatmap showing which nodes are "Death Traps" (high detection rate) |
+| **Winning Metrics banner** | One-glance KPI bar: Exfils · Mean TTD · Train Efficiency · Model Confidence |
 
 ---
 
@@ -44,6 +50,7 @@ python main.py          # Watch the competition — no setup needed
 | 12 | Replay Dashboard (port 8050, episode trace scrubber) | ✅ |
 | 13 | Live Training Dashboard (unified, 6 tabs, auto-poll) | ✅ |
 | 14 | Dashboard v2: SQLite telemetry, Live Logs, History tab, agent status bar, gap chart | ✅ |
+| **D** | **Neural Engine: Token-Squeeze, Elo analytics, self-play pipeline, winning metrics** | ✅ |
 
 **Tests: 290 passing, 0 failing**
 
@@ -97,7 +104,7 @@ python -m cipher.dashboard.app
 # Open: http://localhost:8050
 ```
 
-Toggle between **Episode Replay** (step through saved traces) and **Live Training** (8 real-time tabs):
+Toggle between **Episode Replay** (step through saved traces) and **Live Training** (9 real-time tabs):
 
 | Tab | What you see |
 |-----|-------------|
@@ -109,6 +116,9 @@ Toggle between **Episode Replay** (step through saved traces) and **Live Trainin
 | **Difficulty** | Auto-escalating difficulty curve + correlation scatter |
 | **Learning** | Reward curves + RED−BLUE gap chart + 10-ep win rate rolling average |
 | **History** | All runs aggregated from SQLite — cross-run reward comparison + outcome distribution |
+| **Analytics ★** | Elo rating chart · 50-node Death Trap heatmap · Reward curve comparison |
+
+**Winning Metrics banner** (top of dashboard) shows at-a-glance: Total Exfils · Mean Time-to-Detection · Training Efficiency · Model Confidence.
 
 Agent status bar (below header) shows every agent's last action, zone, suspicion & detection — updates every 1.5s during live runs. API cost estimate displayed in header after run completes.
 

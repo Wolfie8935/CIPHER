@@ -70,6 +70,40 @@ def _tab_header(title: str, description: str) -> html.Div:
     )
 
 
+def _build_analytics_tab_layout() -> html.Div:
+    return html.Div([
+        _tab_header(
+            "CIPHER Analytics — Elo Ratings · Detection Heatmap · Reward Curves",
+            "Elo tracks RED vs BLUE win rates as ratings. Heatmap shows which nodes are 'Death Traps'. "
+            "Reward curves with moving averages prove the RL training signal is working.",
+        ),
+        # Winning Metrics Row
+        html.Div(
+            id="analytics-winning-metrics",
+            style={"marginBottom": "12px"},
+        ),
+        # Top row: Elo + Reward Curves
+        html.Div([
+            html.Div(
+                dcc.Graph(id="analytics-elo-chart", style={"height": "260px"},
+                          config={"displayModeBar": False}),
+                style={"flex": "1"},
+            ),
+            html.Div(
+                dcc.Graph(id="analytics-reward-curves", style={"height": "260px"},
+                          config={"displayModeBar": False}),
+                style={"flex": "1"},
+            ),
+        ], style={"display": "flex", "gap": "12px", "marginBottom": "12px"}),
+        # Bottom: Detection Heatmap (full width)
+        dcc.Graph(
+            id="analytics-heatmap",
+            style={"height": "320px"},
+            config={"displayModeBar": False},
+        ),
+    ])
+
+
 def _build_tab1_layout() -> html.Div:
     return html.Div(
         [
@@ -667,6 +701,15 @@ def create_live_layout() -> html.Div:
                      style={"padding": "4px 16px", "background": "#0a0a0a",
                             "borderBottom": f"1px solid {BORDER_COLOR}",
                             "minHeight": "24px"}),
+            # ── Winning Metrics Banner ────────────────────────────────────
+            html.Div(
+                id="winning-metrics-banner",
+                style={
+                    "display": "flex", "gap": "0", "alignItems": "stretch",
+                    "background": "#060a14",
+                    "borderBottom": f"2px solid {BORDER_COLOR}",
+                },
+            ),
             # ── Tabs ─────────────────────────────────────────────────────
             dcc.Tabs(
                 id="main-tabs",
@@ -688,6 +731,10 @@ def create_live_layout() -> html.Div:
                             style=_tab_style, selected_style=_tab_sel_style),
                     dcc.Tab(label="History",       value="tab-history",
                             style=_tab_style, selected_style=_tab_sel_style),
+                    dcc.Tab(label="Analytics ★",   value="tab-analytics",
+                            style={**_tab_style, "color": GOLD_COLOR},
+                            selected_style={**_tab_sel_style, "color": GOLD_COLOR,
+                                            "borderTop": f"2px solid {GOLD_COLOR}"}),
                 ],
                 colors={"border": BORDER_COLOR, "primary": RED_COLOR, "background": "#0a0a0a"},
             ),
@@ -724,6 +771,7 @@ def render_tab(tab):
         ("tab-difficulty", _build_tab5_layout),
         ("tab-evolution",  _build_tab6_layout),
         ("tab-history",    _build_tab_history_layout),
+        ("tab-analytics",  _build_analytics_tab_layout),
     ]
     children = []
     for tab_id, builder in tabs_cfg:
@@ -1732,6 +1780,71 @@ def get_live_dashboard() -> dash.Dash:
     return app
 
 
+def update_analytics(_n):
+    """Refresh the Analytics tab: Elo chart, heatmap, reward curves."""
+    try:
+        from cipher.dashboard.analytics import (
+            build_elo_chart, build_detection_heatmap, build_reward_curves,
+        )
+        df = _get_run_frame()
+        events = _load_training_events()
+        elo_fig = build_elo_chart(df)
+        heat_fig = build_detection_heatmap(events=events)
+        curve_fig = build_reward_curves(df)
+        return elo_fig, heat_fig, curve_fig
+    except Exception:
+        empty = go.Figure()
+        empty.update_layout(paper_bgcolor=PANEL_BG, plot_bgcolor=DARK_BG,
+                            font=dict(color=TEXT_SECONDARY))
+        return empty, empty, empty
+
+
+def update_winning_metrics_banner(_n):
+    """Build the top winning metrics banner HTML."""
+    try:
+        from cipher.dashboard.analytics import compute_winning_metrics
+        df = _get_run_frame()
+        metrics = compute_winning_metrics(df if df is not None else None)
+    except Exception:
+        metrics = {
+            "total_exfils": 0, "mean_ttd": 0.0, "efficiency_pct": 0.0,
+            "model_confidence": "N/A", "red_win_rate": 0.0, "blue_win_rate": 0.0,
+            "n_episodes": 0,
+        }
+
+    def _metric_tile(label: str, value: str, color: str, bg: str = "#0d1117") -> html.Div:
+        return html.Div([
+            html.Div(value, style={
+                "fontSize": "22px", "fontWeight": "800", "color": color,
+                "fontFamily": "monospace", "letterSpacing": "0.05em",
+            }),
+            html.Div(label, style={
+                "fontSize": "9px", "color": TEXT_SECONDARY,
+                "letterSpacing": "0.12em", "fontFamily": "monospace",
+                "textTransform": "uppercase", "marginTop": "2px",
+            }),
+        ], style={
+            "padding": "10px 20px", "borderRight": f"1px solid {BORDER_COLOR}",
+            "background": bg, "textAlign": "center", "flex": "1",
+        })
+
+    n = metrics["n_episodes"]
+    eff = metrics["efficiency_pct"]
+    eff_str = f"+{eff:.0f}%" if eff >= 0 else f"{eff:.0f}%"
+    conf = metrics["model_confidence"]
+    conf_color = GREEN_COLOR if conf == "HIGH" else GOLD_COLOR if conf == "MED" else GRAY_COLOR
+
+    return [
+        _metric_tile("TOTAL EXFILTRATIONS", str(metrics["total_exfils"]), RED_COLOR),
+        _metric_tile("MEAN TIME TO DETECT", f"{metrics['mean_ttd']:.1f} steps", BLUE_COLOR),
+        _metric_tile("TRAINING EFFICIENCY", eff_str, GREEN_COLOR if eff >= 0 else RED_COLOR),
+        _metric_tile("MODEL CONFIDENCE", conf, conf_color),
+        _metric_tile("RED WIN RATE", f"{metrics['red_win_rate']*100:.0f}%", RED_COLOR),
+        _metric_tile("BLUE WIN RATE", f"{metrics['blue_win_rate']*100:.0f}%", BLUE_COLOR),
+        _metric_tile("EPISODES", str(n), "#aaaaaa"),
+    ]
+
+
 def register_callbacks_on(target_app: dash.Dash) -> None:
     """
     Register all live-training callbacks on *target_app*.
@@ -1880,6 +1993,26 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
     )
     def _tab_history(n):
         return update_tab_history(n)
+
+    # Analytics tab
+    @target_app.callback(
+        [
+            Output("analytics-elo-chart", "figure"),
+            Output("analytics-heatmap", "figure"),
+            Output("analytics-reward-curves", "figure"),
+        ],
+        Input("interval-component", "n_intervals"),
+    )
+    def _analytics(n):
+        return update_analytics(n)
+
+    # Winning metrics banner (updates on fast interval)
+    @target_app.callback(
+        Output("winning-metrics-banner", "children"),
+        Input("interval-component", "n_intervals"),
+    )
+    def _winning_metrics(n):
+        return update_winning_metrics_banner(n)
 
 
 # Wire callbacks onto the module-level app at import time.

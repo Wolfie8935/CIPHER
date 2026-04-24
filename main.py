@@ -555,14 +555,18 @@ def main() -> None:
 
     if args.train:
         from cipher.training.loop import TrainingLoop
+        # Prioritize --episodes if explicitly provided in CLI
         n = args.train_episodes
+        if "--episodes" in sys.argv:
+            n = args.episodes
+        
         console.print(
             f"[bold cyan]CIPHER Training Loop[/bold cyan] — {n} episodes"
         )
         factory = _get_step_callback_factory(run_id) if mode in ("live", "hybrid") else None
         if factory:
             console.print("  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n")
-        TrainingLoop(n_episodes=n).run(step_callback_factory=factory)
+        TrainingLoop(n_episodes=n, max_steps=args.steps).run(step_callback_factory=factory)
         return
 
     # Import episode runner after setting LLM_MODE

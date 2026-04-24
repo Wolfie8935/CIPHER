@@ -30,6 +30,64 @@ logger = get_logger(__name__)
 
 EVENTS_FILE = Path("training_events.jsonl")
 STATE_FILE = Path("training_state.json")
+FINETUNE_DIR = Path("data/finetune")
+
+
+def _mine_episode_data(result: dict, episode_num: int) -> None:
+    """
+    Self-Play Data Pipeline: mine failure and success cases for future LoRA fine-tuning.
+
+    Failure case  (RED loses) → data/finetune/failure_cases.jsonl
+    Success case  (BLUE wins by detection) → data/finetune/success_cases.jsonl
+    """
+    try:
+        FINETUNE_DIR.mkdir(parents=True, exist_ok=True)
+        state = result["state"]
+        terminal_reason = str(getattr(state, "terminal_reason", "max_steps")).lower()
+        red_total = float(result["red_reward"].total)
+        blue_total = float(result["blue_reward"].total)
+
+        episode_log = list(getattr(state, "episode_log", []))
+        red_path = list(getattr(state, "path_history", []))
+        steps = int(getattr(state, "step", 0))
+
+        # ── Failure mining: RED did not exfiltrate ─────────────────────────
+        if terminal_reason in ("detected", "max_steps", "aborted") and red_total < 0.5:
+            red_actions = [
+                e for e in episode_log
+                if str(e.get("agent_id", "")).startswith("red_")
+            ]
+            case = {
+                "episode": episode_num,
+                "timestamp": datetime.now().isoformat(),
+                "terminal_reason": terminal_reason,
+                "red_reward": red_total,
+                "blue_reward": blue_total,
+                "red_path": red_path,
+                "steps": steps,
+                "red_actions": red_actions[:30],  # cap to keep file size sane
+            }
+            with open(FINETUNE_DIR / "failure_cases.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(case, default=str) + "\n")
+
+        # ── Success mining: BLUE detected RED ──────────────────────────────
+        if terminal_reason == "detected":
+            blue_actions = [
+                e for e in episode_log
+                if str(e.get("agent_id", "")).startswith("blue_")
+            ]
+            case = {
+                "episode": episode_num,
+                "timestamp": datetime.now().isoformat(),
+                "blue_reward": blue_total,
+                "steps_to_detect": steps,
+                "blue_actions": blue_actions[:30],
+            }
+            with open(FINETUNE_DIR / "success_cases.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(case, default=str) + "\n")
+
+    except Exception as exc:
+        logger.debug(f"Episode {episode_num} data mining skipped: {exc}")
 
 
 def _append_training_event(event: dict) -> None:
@@ -95,15 +153,17 @@ class TrainingLoop:
     checkpoint saving, and detailed reward curve tracking.
     """
 
-    def __init__(self, n_episodes: int = 3) -> None:
+    def __init__(self, n_episodes: int = 3, max_steps: int = 30) -> None:
         """
         Initialize the training loop.
 
         Args:
             n_episodes: Number of episodes to run. Defaults to 3 for Phase 1.
+            max_steps: Maximum steps per episode. Defaults to 30.
         """
         self.n_episodes = n_episodes
-        logger.debug(f"TrainingLoop initialized: {n_episodes} episodes")
+        self.max_steps = max_steps
+        logger.debug(f"TrainingLoop initialized: {n_episodes} episodes, {max_steps} steps")
 
     def run(self, step_callback_factory=None) -> None:
         """
@@ -146,7 +206,7 @@ class TrainingLoop:
                     total_episodes=self.n_episodes,
                     mode=os.environ.get("LLM_MODE", "stub"),
                     difficulty=scenario.difficulty,
-                    max_steps=15,
+                    max_steps=self.max_steps,
                 )
             except ImportError:
                 pass
@@ -179,7 +239,7 @@ class TrainingLoop:
                     graph=graph,
                     cfg=config,
                     episode_number=episode_num,
-                    max_steps=15,  # Phase 1: 15 steps
+                    max_steps=self.max_steps,
                     verbose=False,
                     step_callback=cb,
                 )
@@ -375,6 +435,10 @@ class TrainingLoop:
                         }
                     )
 
+                # ── Self-Play data pipeline: mine failure/success cases ───
+                _mine_episode_data(result, episode_num)
+                # ── end data pipeline ──────────────────────────────────────
+
                 red_update_count += 1
                 blue_update_count += 1
 
@@ -470,7 +534,7 @@ class TrainingLoop:
         )
 
 
-def run_training(n_episodes: int = 3, verbose: bool = True) -> None:
+def run_training(n_episodes: int = 3, max_steps: int = 30, verbose: bool = True) -> None:
     """
     Convenience wrapper used by the Phase 9 verification script.
 
@@ -480,7 +544,7 @@ def run_training(n_episodes: int = 3, verbose: bool = True) -> None:
         import logging
         logging.disable(logging.CRITICAL)
     try:
-        TrainingLoop(n_episodes=n_episodes).run()
+        TrainingLoop(n_episodes=n_episodes, max_steps=max_steps).run()
     finally:
         if not verbose:
             import logging

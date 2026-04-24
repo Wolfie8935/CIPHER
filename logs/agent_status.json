@@ -1,9 +1,9 @@
 {
-  "run_id": "live_20260424_040634",
-  "episode": 1,
-  "step": 11,
+  "run_id": "live_20260424_132815",
+  "episode": 5,
+  "step": 9,
   "suspicion": 1.0,
-  "detection": 0.68,
+  "detection": 0.29,
   "zone": "Critical/HVT",
   "agents": {
     "red_planner_01": {
@@ -12,13 +12,13 @@
       "team": "red"
     },
     "red_analyst_01": {
-      "action": "read_file",
-      "node": 47,
+      "action": "wait",
+      "node": null,
       "team": "red"
     },
     "red_operative_01": {
       "action": "read_file",
-      "node": 47,
+      "node": null,
       "team": "red"
     },
     "red_exfiltrator_01": {
@@ -27,13 +27,13 @@
       "team": "red"
     },
     "blue_surveillance_01": {
-      "action": "analyze_anomaly",
-      "node": 42,
+      "action": "stand_down",
+      "node": null,
       "team": "blue"
     },
     "blue_threat_hunter_01": {
       "action": "investigate_node",
-      "node": 42,
+      "node": 40,
       "team": "blue"
     },
     "blue_deception_architect_01": {
@@ -42,10 +42,10 @@
       "team": "blue"
     },
     "blue_forensics_01": {
-      "action": "reconstruct_path",
-      "node": null,
+      "action": "investigate_node",
+      "node": 40,
       "team": "blue"
     }
   },
-  "timestamp": "2026-04-24T04:08:13.718259"
+  "timestamp": "2026-04-24T13:36:57.168672"
 }

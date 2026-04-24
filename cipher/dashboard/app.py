@@ -1113,6 +1113,64 @@ register_live_callbacks(app)
 C_INIT = DARK
 
 
+def _make_winning_metrics_bar(C: dict) -> html.Div:
+    """Read rewards_log.csv and build the Winning Metrics top bar."""
+    try:
+        from cipher.dashboard.analytics import compute_winning_metrics, load_rewards_df
+        metrics = compute_winning_metrics(load_rewards_df())
+    except Exception:
+        metrics = {
+            "total_exfils": 0, "mean_ttd": 0.0, "efficiency_pct": 0.0,
+            "model_confidence": "N/A", "red_win_rate": 0.0, "blue_win_rate": 0.0,
+            "n_episodes": 0,
+        }
+
+    eff = metrics["efficiency_pct"]
+    eff_str = f"+{eff:.0f}%" if eff >= 0 else f"{eff:.0f}%"
+    conf = metrics["model_confidence"]
+    conf_color = C["green"] if conf == "HIGH" else C["yellow"] if conf == "MED" else C["gray"]
+
+    tiles = [
+        ("TOTAL EXFILS", str(metrics["total_exfils"]), C["red"]),
+        ("MEAN TTD", f"{metrics['mean_ttd']:.1f} steps", C["blue"]),
+        ("TRAIN EFFICIENCY", eff_str, C["green"] if eff >= 0 else C["red"]),
+        ("MODEL CONFIDENCE", conf, conf_color),
+        ("RED WIN RATE", f"{metrics['red_win_rate']*100:.0f}%", C["red"]),
+        ("BLUE WIN RATE", f"{metrics['blue_win_rate']*100:.0f}%", C["blue"]),
+        ("EPISODES", str(metrics["n_episodes"]), C["text_dim"]),
+    ]
+
+    children = []
+    for label, value, color in tiles:
+        children.append(html.Div([
+            html.Div(value, style={
+                "fontSize": "18px", "fontWeight": "800",
+                "color": color, "fontFamily": "'JetBrains Mono', monospace",
+            }),
+            html.Div(label, style={
+                "fontSize": "8px", "color": C["text_dim"],
+                "letterSpacing": "0.12em", "fontFamily": "'JetBrains Mono', monospace",
+                "marginTop": "2px",
+            }),
+        ], style={
+            "padding": "8px 16px",
+            "borderRight": f"1px solid {C['border']}",
+            "textAlign": "center",
+            "flex": "1",
+        }))
+
+    return html.Div(
+        children,
+        style={
+            "display": "flex",
+            "background": C["surface"],
+            "borderBottom": f"2px solid {C['border']}",
+            "alignItems": "stretch",
+        },
+        title="Aggregated metrics from all recorded episodes — run python main.py --live to generate",
+    )
+
+
 def make_layout():
     C = C_INIT
     traces = get_available_traces()
@@ -1217,6 +1275,9 @@ def make_layout():
             "flexWrap": "wrap",
             "rowGap": "8px",
         }),
+
+        # ══════════ WINNING METRICS BANNER ══════════
+        _make_winning_metrics_bar(C),
 
         # Quick guide panel (always visible for judges)
         html.Details([

@@ -87,9 +87,9 @@ Create a top-bar banner with:
 ---
 
 ## Checklist
-- [ ] Implement `compress_history` in LLM client
-- [ ] Create the `Analytics` tab in the dashboard
-- [ ] Build the Heatmap generator for the 50-node network
-- [ ] Verify `rewards_log.csv` thread-safety
-- [ ] Log "Failure Case" dataset for future training
-- [ ] Benchmark "Hybrid" vs "Live" speed and cost
+- [x] Implement `compress_history` in LLM client
+- [x] Create the `Analytics` tab in the dashboard
+- [x] Build the Heatmap generator for the 50-node network
+- [x] Verify `rewards_log.csv` thread-safety
+- [x] Log "Failure Case" dataset for future training
+- [x] Benchmark "Hybrid" vs "Live" speed and cost

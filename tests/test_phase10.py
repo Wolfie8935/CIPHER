@@ -302,7 +302,8 @@ class TestDashboardTab6Layout:
         from cipher.dashboard.live import create_live_layout
         layout = create_live_layout()
         layout_str = str(layout)
-        assert "Learning Curve" in layout_str
+        # Tab label evolved from "Learning Curve" to "Learning" in Phase 14
+        assert "Learning" in layout_str
 
     def test_update_tab6_returns_three_values(self):
         os.environ["LLM_MODE"] = "stub"
@@ -310,13 +311,15 @@ class TestDashboardTab6Layout:
         result = update_tab6(0)
         assert isinstance(result, tuple) or hasattr(result, "__len__")
         items = list(result) if not isinstance(result, (list, tuple)) else result
-        assert len(items) == 3
+        assert len(items) >= 3  # Phase 14 added winrate chart (4th output)
 
     def test_update_tab6_figures_are_go_Figure(self):
         import plotly.graph_objects as go
         os.environ["LLM_MODE"] = "stub"
         from cipher.dashboard.live import update_tab6
-        fig1, fig2, stats = update_tab6(0)
+        result = update_tab6(0)
+        items = list(result) if not isinstance(result, (list, tuple)) else result
+        fig1, fig2 = items[0], items[1]
         assert isinstance(fig1, go.Figure)
         assert isinstance(fig2, go.Figure)
 
