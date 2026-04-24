@@ -165,7 +165,7 @@ class TrainingLoop:
         self.max_steps = max_steps
         logger.debug(f"TrainingLoop initialized: {n_episodes} episodes, {max_steps} steps")
 
-    def run(self, step_callback_factory=None) -> None:
+    def run(self, step_callback_factory=None, generate_video: bool = False) -> None:
         """
         Run the training loop.
 
@@ -438,6 +438,48 @@ class TrainingLoop:
                 # ── Self-Play data pipeline: mine failure/success cases ───
                 _mine_episode_data(result, episode_num)
                 # ── end data pipeline ──────────────────────────────────────
+
+                # ── Phase C: Narrative post-mortem (The Daily Breach) ─────
+                try:
+                    from cipher.utils.storyteller import generate_report
+                    terminal_reason = str(getattr(state, "terminal_reason", "max_steps"))
+                    ep_log = list(getattr(state, "episode_log", []))
+                    _report = generate_report(
+                        episode_num=episode_num,
+                        episode_log=ep_log,
+                        outcome=terminal_reason,
+                        red_reward=red_total,
+                        blue_reward=blue_total,
+                        save=True,
+                    )
+                    logger.debug(f"Narrative report saved for episode {episode_num}")
+                except Exception as _story_exc:
+                    logger.debug(f"Storyteller skipped: {_story_exc}")
+                # ── end narrative ───────────────────────────────────────────
+
+                # ── Phase C: Video highlight generation ───────────────────
+                if generate_video:
+                    try:
+                        from cipher.utils.video_gen import generate_episode_video
+                        Path("episode_highlights").mkdir(exist_ok=True)
+                        _vid_data = {
+                            "episode_num": episode_num,
+                            "episode_log": list(getattr(state, "episode_log", [])),
+                            "outcome": str(getattr(state, "terminal_reason", "max_steps")),
+                            "red_reward": red_total,
+                            "blue_reward": blue_total,
+                            "mode": os.environ.get("LLM_MODE", "stub"),
+                            "steps": int(getattr(state, "step", 0)),
+                        }
+                        _vid_path = generate_episode_video(
+                            _vid_data,
+                            output_path=f"episode_highlights/episode_{episode_num:03d}_highlight.mp4",
+                        )
+                        if _vid_path:
+                            logger.info(f"Video saved: {_vid_path}")
+                    except Exception as _vid_exc:
+                        logger.debug(f"Video generation skipped: {_vid_exc}")
+                # ── end video ───────────────────────────────────────────────
 
                 red_update_count += 1
                 blue_update_count += 1

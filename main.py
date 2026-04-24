@@ -526,6 +526,8 @@ def main() -> None:
                         help="Skip saving episode traces")
     parser.add_argument("--verbose", action="store_true",
                         help="Show per-step agent actions (very verbose)")
+    parser.add_argument("--video", action="store_true",
+                        help="Generate CIPHER Cinema video highlights after each episode")
     args = parser.parse_args()
 
     # Set LLM mode
@@ -567,7 +569,10 @@ def main() -> None:
         factory = _get_step_callback_factory(run_id) if mode in ("live", "hybrid") else None
         if factory:
             console.print("  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n")
-        TrainingLoop(n_episodes=n, max_steps=args.steps).run(step_callback_factory=factory)
+        TrainingLoop(n_episodes=n, max_steps=args.steps).run(
+            step_callback_factory=factory,
+            generate_video=args.video,
+        )
         return
 
     # Import episode runner after setting LLM_MODE
@@ -636,6 +641,72 @@ def main() -> None:
 
         if isinstance(result, dict):
             _print_episode_battle(result, ep_num, mode=mode)
+
+            # ── Narrative post-mortem ──────────────────────────────────────
+            try:
+                from cipher.utils.storyteller import generate_report
+                _state = result.get("state")
+                _ep_log = list(getattr(_state, "episode_log", []))
+                _terminal = str(getattr(_state, "terminal_reason", "max_steps"))
+                _rr = result.get("red_reward")
+                _br = result.get("blue_reward")
+                _red_total = float(_rr.total) if _rr else 0.0
+                _blue_total = float(_br.total) if _br else 0.0
+                generate_report(
+                    episode_num=ep_num,
+                    episode_log=_ep_log,
+                    outcome=_terminal,
+                    red_reward=_red_total,
+                    blue_reward=_blue_total,
+                    save=True,
+                )
+                console.print(f"  [dim yellow]📰 Narrative report → episode_reports/episode_{ep_num:03d}_report.md[/dim yellow]")
+            except Exception:
+                pass
+
+            # ── CIPHER Cinema video highlight ─────────────────────────────
+            if args.video:
+                try:
+                    from cipher.utils.video_gen import generate_episode_video
+                    from pathlib import Path as _Path
+                    from datetime import datetime as _dt
+                    _Path("episode_highlights").mkdir(exist_ok=True)
+                    _state = result.get("state")
+                    _rr = result.get("red_reward")
+                    _br = result.get("blue_reward")
+
+                    def _to_float(r):
+                        if r is None:
+                            return 0.0
+                        if hasattr(r, "total"):
+                            return float(r.total)
+                        try:
+                            return float(r)
+                        except (TypeError, ValueError):
+                            return 0.0
+
+                    _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                    _out = f"episode_highlights/episode_{ep_num:03d}_{_ts}.mp4"
+                    _ep_log = [e for e in list(getattr(_state, "episode_log", []) or []) if isinstance(e, dict)]
+                    _judgment = result.get("judgment")
+                    _verdict = str(getattr(_judgment, "episode_verdict", "") or "").lower()
+                    _vid_path = generate_episode_video(
+                        {
+                            "episode_num": ep_num,
+                            "episode_log": _ep_log,
+                            "outcome": str(getattr(_state, "terminal_reason", "max_steps")),
+                            "verdict": _verdict,
+                            "red_reward": _to_float(_rr),
+                            "blue_reward": _to_float(_br),
+                            "mode": mode,
+                            "steps": int(getattr(_state, "step", 0)),
+                        },
+                        output_path=_out,
+                    )
+                    if _vid_path:
+                        console.print(f"  [dim green]🎬 Video → {_vid_path}[/dim green]")
+                except Exception as _ve:
+                    console.print(f"  [dim]Video generation skipped: {_ve}[/dim]")
 
         # Rename trace to include timestamp + mode for dashboard trace selector
         if save_trace:

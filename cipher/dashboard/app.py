@@ -1638,6 +1638,83 @@ def make_layout():
     })
 
 
+
+
+def _make_lore_layout():
+    """Build the Lore tab - AI-powered narrative post-mortems."""
+    try:
+        from cipher.utils.storyteller import load_reports
+        reports = load_reports()
+    except Exception:
+        reports = []
+
+    if not reports:
+        cards = [html.Div([
+            html.Div('NO REPORTS YET', style={
+                'color': DARK['yellow'], 'fontSize': '18px',
+                'fontFamily': "'JetBrains Mono', monospace",
+                'marginBottom': '12px', 'letterSpacing': '0.15em',
+            }),
+            html.Div('Reports auto-generate after each episode.', style={
+                'color': DARK['text_dim'], 'fontSize': '12px', 'marginBottom': '8px',
+            }),
+        ], style={'textAlign': 'center', 'padding': '60px 0'})]
+    else:
+        cards = []
+        for rep in reports:
+            outcome_color = DARK['red'] if 'exfil' in rep['text'].lower() else (
+                DARK['blue'] if 'detect' in rep['text'].lower() else DARK['yellow']
+            )
+            lines = rep['text'].split('\n')
+            body_lines = [l for l in lines if not l.startswith('#') and l.strip() != '---']
+            body = '\n'.join(body_lines).strip()
+            ep_num = rep['episode']
+            fname = rep['filename']
+            cards.append(html.Div([
+                html.Div(f'EPISODE {ep_num:03d} AFTER-ACTION REPORT', style={
+                    'color': DARK['yellow'], 'fontSize': '11px',
+                    'fontFamily': "'JetBrains Mono', monospace",
+                    'fontWeight': '700', 'letterSpacing': '0.12em', 'marginBottom': '6px',
+                }),
+                html.Div(fname, style={
+                    'color': DARK['text_dim'], 'fontSize': '9px',
+                    'fontFamily': "'JetBrains Mono', monospace", 'marginBottom': '10px',
+                }),
+                html.Div(body, style={
+                    'fontFamily': "'Inter', sans-serif", 'fontSize': '13px',
+                    'lineHeight': '1.75', 'color': DARK['text'], 'whiteSpace': 'pre-wrap',
+                }),
+            ], style={
+                'background': 'linear-gradient(135deg, #0d1117 0%, #111827 100%)',
+                'border': '1px solid rgba(251,191,36,0.3)',
+                'borderLeft': f'3px solid {outcome_color}',
+                'borderRadius': '8px', 'padding': '16px 20px', 'marginBottom': '12px',
+            }))
+
+    n_reports = len(reports)
+    return html.Div([
+        html.Div([
+            html.Div('[ THE DAILY BREACH ]', style={
+                'fontFamily': "'JetBrains Mono', monospace", 'fontSize': '20px',
+                'fontWeight': '900', 'color': DARK['yellow'], 'letterSpacing': '0.2em',
+                'textShadow': '0 0 10px rgba(251,191,36,0.5)', 'marginBottom': '4px',
+            }),
+            html.Div(
+                f'AI-powered cyber-warfare post-mortems  -  {n_reports} report(s)',
+                style={'color': DARK['text_dim'], 'fontSize': '11px',
+                       'fontFamily': "'JetBrains Mono', monospace"},
+            ),
+        ], style={'padding': '20px 24px', 'borderBottom': f"1px solid {DARK['border']}",
+                  'background': DARK['surface']}),
+        html.Div(cards, style={'padding': '20px 24px', 'maxWidth': '900px', 'margin': '0 auto'}),
+        html.Div([
+            html.Span('Reload the dashboard to see new reports after running episodes.',
+                      style={'color': DARK['text_dim'], 'fontSize': '10px',
+                             'fontFamily': "'JetBrains Mono', monospace"}),
+        ], style={'padding': '12px 24px', 'borderTop': f"1px solid {DARK['border']}",
+                  'textAlign': 'center'}),
+    ], style={'background': DARK['bg'], 'minHeight': '80vh'})
+
 def make_unified_layout():
     return html.Div(
         [
@@ -1674,6 +1751,7 @@ def make_unified_layout():
                                 options=[
                                     {"label": " Episode Replay", "value": "replay"},
                                     {"label": " Live Training", "value": "live"},
+                                    {"label": " 📰 Lore", "value": "lore"},
                                 ],
                                 value="replay",
                                 inline=True,
@@ -1696,6 +1774,8 @@ def make_unified_layout():
             html.Div(id="replay-container", children=make_layout()),
             html.Div(id="live-container", children=create_live_layout(),
                      style={"display": "none"}),
+            # ── LORE TAB ───────────────────────────────────────────────
+            html.Div(id="lore-container", children=_make_lore_layout(), style={"display": "none"}),
         ]
     )
 
@@ -1725,12 +1805,17 @@ app.layout = make_unified_layout
 @app.callback(
     Output("replay-container", "style"),
     Output("live-container", "style"),
+    Output("lore-container", "style"),
     Input("dashboard-mode", "value"),
 )
 def toggle_dashboard_mode(mode):
+    hidden = {"display": "none"}
+    visible = {"display": "block"}
     if mode == "live":
-        return {"display": "none"}, {"display": "block"}
-    return {"display": "block"}, {"display": "none"}
+        return hidden, visible, hidden
+    if mode == "lore":
+        return hidden, hidden, visible
+    return visible, hidden, hidden
 
 
 @app.callback(

@@ -13,3 +13,24 @@ build/
 *.egg
 .venv/
 venv/
+
+# ── Generated assets (video highlights & narrative reports) ──────────────────
+episode_highlights/
+episode_reports/
+
+# ── Temp / upload scratch ─────────────────────────────────────────────────────
+tmp_hf_upload/
+
+# ── Logs & data ───────────────────────────────────────────────────────────────
+logs/
+data/finetune/
+run_state.json
+training_events.json
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
