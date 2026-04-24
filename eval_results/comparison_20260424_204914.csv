@@ -1,0 +1,4 @@
+episode,mode,red_total,blue_total,terminal_reason,steps,exfil_count,detection_conf,elapsed_s
+1,stub,1.002,0.6586,exfiltration_complete,9,3,0.48,0.04
+2,stub,0.25,0.7003,detected,8,1,1.0,0.01
+3,stub,0.5847,0.0833,max_steps,10,1,0.39,0.01

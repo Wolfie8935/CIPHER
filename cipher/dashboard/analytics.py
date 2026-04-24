@@ -438,3 +438,331 @@ def compute_winning_metrics(df: pd.DataFrame | None = None) -> dict[str, Any]:
         "blue_win_rate": round(blue_wins / max(n, 1), 2),
         "n_episodes": n,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E.md Change 2 — Model Comparison Chart
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Colour palette for modes (stub → dim, live → blue, hybrid → gold/green)
+_MODE_COLORS: dict[str, str] = {
+    "stub":   "#888888",
+    "live":   "#4488ff",
+    "hybrid": "#ffaa00",
+    "full":   "#44cc88",
+}
+_FALLBACK_COLORS = ["#cc88ff", "#ff8844", "#44ffcc"]
+
+
+def _mode_color(mode: str, idx: int = 0) -> str:
+    return _MODE_COLORS.get(mode.lower(), _FALLBACK_COLORS[idx % len(_FALLBACK_COLORS)])
+
+
+def build_model_comparison_chart(eval_json_path: str | Path) -> tuple[go.Figure, go.Figure, go.Figure]:
+    """
+    Read the eval_runner comparison JSON and return three Plotly figures:
+
+    1. Grouped bar chart — RED win rate per mode
+    2. Grouped bar chart — Mean episode length per mode (shorter = more efficient RED)
+    3. Box/violin plot  — RED reward distribution per mode
+
+    Args:
+        eval_json_path: Path to ``eval_results/comparison_TIMESTAMP.json``.
+
+    Returns:
+        (fig_win_rate, fig_steps, fig_reward_dist)
+    """
+    path = Path(eval_json_path)
+    if not path.exists():
+        empty = _empty_comparison_figure("No eval data — run:  python main.py --eval 20")
+        return empty, empty, empty
+
+    try:
+        import json as _json
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        empty = _empty_comparison_figure(f"Error loading eval JSON: {exc}")
+        return empty, empty, empty
+
+    summary = data.get("summary", {})
+    modes   = list(summary.keys())
+    if not modes:
+        empty = _empty_comparison_figure("Eval JSON has no summary — re-run eval_runner.")
+        return empty, empty, empty
+
+    colors  = [_mode_color(m, i) for i, m in enumerate(modes)]
+
+    # ── Figure 1: RED Win Rate (grouped bar) ─────────────────────────────
+    win_rates  = [summary.get(m, {}).get("red_win_rate", 0.0) * 100 for m in modes]
+    fig_wr = go.Figure(go.Bar(
+        x=[m.upper() for m in modes],
+        y=win_rates,
+        marker_color=colors,
+        text=[f"{v:.1f}%" for v in win_rates],
+        textposition="outside",
+        hovertemplate="Mode: %{x}<br>RED Win Rate: %{y:.1f}%<extra></extra>",
+    ))
+    # Baseline reference line (first mode)
+    if len(win_rates) > 1:
+        fig_wr.add_hline(
+            y=win_rates[0], line=dict(color="#555", dash="dot"),
+            annotation_text=f"Baseline ({modes[0].upper()})",
+            annotation_font=dict(size=9, color=TEXT_SECONDARY),
+        )
+    fig_wr.update_layout(
+        title=dict(
+            text="RED Win Rate by Mode  —  Higher is Better for RED Team",
+            font=dict(size=13, color=TEXT_SECONDARY),
+        ),
+        xaxis_title="LLM Mode",
+        yaxis_title="RED Win Rate (%)",
+        yaxis=dict(range=[0, min(100, max(win_rates or [0]) * 1.3 + 10)],
+                   gridcolor="#1a1a1a", zerolinecolor="#333"),
+        showlegend=False,
+        **_PLOTLY_BASE,
+    )
+
+    # ── Figure 2: Mean Steps per Episode (grouped bar) ────────────────────
+    avg_steps = [summary.get(m, {}).get("avg_steps", 0.0) for m in modes]
+    fig_steps = go.Figure(go.Bar(
+        x=[m.upper() for m in modes],
+        y=avg_steps,
+        marker_color=colors,
+        text=[f"{v:.1f}" for v in avg_steps],
+        textposition="outside",
+        hovertemplate="Mode: %{x}<br>Avg Steps: %{y:.1f}<extra></extra>",
+    ))
+    if len(avg_steps) > 1:
+        fig_steps.add_hline(
+            y=avg_steps[0], line=dict(color="#555", dash="dot"),
+            annotation_text=f"Baseline ({modes[0].upper()})",
+            annotation_font=dict(size=9, color=TEXT_SECONDARY),
+        )
+    fig_steps.update_layout(
+        title=dict(
+            text="Mean Episode Length by Mode  —  Shorter = More Efficient RED",
+            font=dict(size=13, color=TEXT_SECONDARY),
+        ),
+        xaxis_title="LLM Mode",
+        yaxis_title="Avg Steps",
+        showlegend=False,
+        **_PLOTLY_BASE,
+    )
+
+    # ── Figure 3: RED Reward Distribution (violin / box) ─────────────────
+    all_rows: dict[str, list[float]] = {}
+    for mode_key, rows in data.get("modes", {}).items():
+        all_rows[mode_key] = [float(r.get("red_total", 0.0)) for r in rows if isinstance(r, dict)]
+
+    fig_dist = go.Figure()
+    for i, m in enumerate(modes):
+        vals = all_rows.get(m, [])
+        if vals:
+            fig_dist.add_trace(go.Violin(
+                y=vals,
+                name=m.upper(),
+                box_visible=True,
+                meanline_visible=True,
+                line_color=_mode_color(m, i),
+                fillcolor=_mode_color(m, i),
+                opacity=0.6,
+            ))
+        else:
+            # Fallback to a single-point scatter if no row data
+            avg = summary.get(m, {}).get("avg_red", 0.0)
+            fig_dist.add_trace(go.Bar(
+                x=[m.upper()], y=[avg],
+                marker_color=_mode_color(m, i),
+                name=m.upper(),
+            ))
+    fig_dist.add_hline(y=0, line=dict(color="#444", dash="dot"))
+    fig_dist.update_layout(
+        title=dict(
+            text="RED Reward Distribution by Mode",
+            font=dict(size=13, color=TEXT_SECONDARY),
+        ),
+        xaxis_title="LLM Mode",
+        yaxis_title="RED Total Reward",
+        violinmode="overlay",
+        **_PLOTLY_BASE,
+    )
+
+    return fig_wr, fig_steps, fig_dist
+
+
+def _empty_comparison_figure(msg: str) -> go.Figure:
+    """Return a minimal blank figure with a centred annotation."""
+    fig = go.Figure()
+    fig.add_annotation(
+        text=msg, xref="paper", yref="paper",
+        x=0.5, y=0.5, showarrow=False,
+        font=dict(size=12, color=TEXT_SECONDARY),
+    )
+    fig.update_layout(**_PLOTLY_BASE)
+    return fig
+
+
+def find_latest_eval_json() -> Path | None:
+    """Return the most recent comparison JSON in eval_results/, or None."""
+    try:
+        from pathlib import Path as _P
+        results_dir = _P(__file__).resolve().parent.parent.parent / "eval_results"
+        jsons = sorted(results_dir.glob("comparison_*.json"), reverse=True)
+        return jsons[0] if jsons else None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E.md Change 3 — Convergence Curve
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def build_convergence_curve(
+    rewards_csv_path: str | Path | None = None,
+    window: int = 10,
+    lora_checkpoint_episodes: list[int] | None = None,
+) -> go.Figure:
+    """
+    Plot RED reward convergence curve with a rolling average and optional
+    vertical lines marking where LoRA checkpoints were created.
+
+    Args:
+        rewards_csv_path: Path to ``rewards_log.csv``.
+                          Defaults to the project-root rewards_log.csv.
+        window:           Rolling window size (default 10).
+        lora_checkpoint_episodes: List of episode numbers where a LoRA
+                          checkpoint was saved.  If None, the function tries
+                          to infer them from ``training_events.jsonl``.
+
+    Returns:
+        A Plotly Figure.
+    """
+    # ── Load data ─────────────────────────────────────────────────────────
+    if rewards_csv_path is None:
+        csv_path = REWARDS_CSV
+    else:
+        csv_path = Path(rewards_csv_path)
+
+    df = load_rewards_df() if csv_path == REWARDS_CSV else _load_csv_safe(csv_path)
+
+    fig = go.Figure()
+
+    if df.empty or "red_total" not in df.columns:
+        fig.add_annotation(
+            text="No reward data yet — run training first.",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=12, color=TEXT_SECONDARY),
+        )
+        fig.update_layout(
+            title=dict(text="RED Reward Convergence Curve (no data)", font=dict(size=13, color=TEXT_SECONDARY)),
+            **_PLOTLY_BASE,
+        )
+        return fig
+
+    episodes  = list(range(1, len(df) + 1))
+    red_vals  = df["red_total"].tolist()
+
+    # Rolling average
+    w = min(window, max(1, len(episodes) // 4))
+    red_ma = pd.Series(red_vals).rolling(w, min_periods=1).mean().tolist()
+
+    # ── Raw reward (faded) ────────────────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=episodes, y=red_vals,
+        name="RED reward (raw)",
+        line=dict(color=RED_COLOR, width=1, dash="dot"),
+        opacity=0.35,
+        mode="lines",
+    ))
+
+    # ── Rolling average (prominent) ───────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=episodes, y=red_ma,
+        name=f"RED {w}-ep rolling avg",
+        line=dict(color=RED_COLOR, width=2.5),
+        mode="lines",
+    ))
+
+    # ── BLUE moving average (context) ────────────────────────────────────
+    if "blue_total" in df.columns:
+        blue_vals = df["blue_total"].tolist()
+        blue_ma   = pd.Series(blue_vals).rolling(w, min_periods=1).mean().tolist()
+        fig.add_trace(go.Scatter(
+            x=episodes, y=blue_ma,
+            name=f"BLUE {w}-ep rolling avg",
+            line=dict(color=BLUE_COLOR, width=1.5, dash="dot"),
+            mode="lines",
+            opacity=0.6,
+        ))
+
+    fig.add_hline(y=0, line=dict(color="#444", dash="dot"))
+
+    # ── LoRA checkpoint vertical lines ────────────────────────────────────
+    checkpoints = lora_checkpoint_episodes or _infer_lora_checkpoints()
+    for ep in checkpoints:
+        fig.add_vline(
+            x=ep,
+            line=dict(color=GOLD_COLOR, width=1.5, dash="dash"),
+            annotation_text=f"LoRA ckpt @{ep}",
+            annotation_font=dict(size=9, color=GOLD_COLOR),
+        )
+
+    # ── Trend annotation: first vs last 10% ──────────────────────────────
+    n = len(red_vals)
+    if n >= 20:
+        batch = max(1, n // 10)
+        early = float(np.mean(red_vals[:batch]))
+        late  = float(np.mean(red_vals[-batch:]))
+        delta = late - early
+        sign  = "+" if delta >= 0 else ""
+        fig.add_annotation(
+            text=f"Early avg: {early:+.3f}<br>Late avg: {late:+.3f}<br>Δ = {sign}{delta:.3f}",
+            xref="paper", yref="paper",
+            x=0.98, y=0.05,
+            showarrow=False,
+            align="right",
+            font=dict(size=10, color=GOLD_COLOR),
+            bgcolor=PANEL_BG,
+            bordercolor=BORDER_COLOR,
+            borderwidth=1,
+        )
+
+    fig.update_layout(
+        title=dict(
+            text="RED Reward Convergence Curve  —  'Hockey Stick' shows LoRA learning",
+            font=dict(size=13, color=TEXT_SECONDARY),
+        ),
+        xaxis_title="Training Episode",
+        yaxis_title=f"RED Reward ({w}-ep rolling avg)",
+        legend=dict(orientation="h", y=1.12, font=dict(size=10)),
+        **_PLOTLY_BASE,
+    )
+    return fig
+
+
+def _load_csv_safe(path: Path) -> pd.DataFrame:
+    """Load a CSV safely; return empty DataFrame on failure."""
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _infer_lora_checkpoints() -> list[int]:
+    """
+    Try to infer LoRA checkpoint episodes from training_events.jsonl.
+    Looks for events with type containing 'checkpoint' or 'lora'.
+    Returns a list of episode numbers (may be empty).
+    """
+    events = load_events()
+    checkpoints: list[int] = []
+    for ev in events:
+        etype = str(ev.get("event_type", "")).lower()
+        if "checkpoint" in etype or "lora" in etype:
+            ep = ev.get("episode")
+            try:
+                checkpoints.append(int(ep))
+            except (TypeError, ValueError):
+                pass
+    return sorted(set(checkpoints))

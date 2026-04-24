@@ -1,0 +1,58 @@
+{
+  "modes": {
+    "stub": [
+      {
+        "episode": 1,
+        "mode": "stub",
+        "red_total": 1.002,
+        "blue_total": 0.6586,
+        "terminal_reason": "exfiltration_complete",
+        "steps": 9,
+        "exfil_count": 3,
+        "detection_conf": 0.48,
+        "elapsed_s": 0.04
+      },
+      {
+        "episode": 2,
+        "mode": "stub",
+        "red_total": 0.25,
+        "blue_total": 0.7003,
+        "terminal_reason": "detected",
+        "steps": 8,
+        "exfil_count": 1,
+        "detection_conf": 1.0,
+        "elapsed_s": 0.01
+      },
+      {
+        "episode": 3,
+        "mode": "stub",
+        "red_total": 0.5847,
+        "blue_total": 0.0833,
+        "terminal_reason": "max_steps",
+        "steps": 10,
+        "exfil_count": 1,
+        "detection_conf": 0.39,
+        "elapsed_s": 0.01
+      }
+    ]
+  },
+  "summary": {
+    "stub": {
+      "n_episodes": 3,
+      "red_win_rate": 0.3333,
+      "avg_red": 0.6122,
+      "avg_blue": 0.4807,
+      "avg_steps": 9.0,
+      "avg_exfil": 1.67,
+      "avg_detection_rate": 0.6233
+    }
+  },
+  "meta": {
+    "n_episodes": 3,
+    "max_steps": 10,
+    "timestamp": "2026-04-24T20:49:14.743576",
+    "modes": [
+      "stub"
+    ]
+  }
+}
