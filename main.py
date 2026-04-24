@@ -486,20 +486,21 @@ def _get_step_callback_factory(run_id: str):
 
 
 def _validate_hybrid_models() -> None:
-    """Check that all specialist LoRA adapters exist; warn if missing (Change 11)."""
+    """Check that all specialist LoRA adapters exist; warn if missing."""
     specialists = {
-        "RED Planner v2":        os.getenv("RED_PLANNER_LORA_PATH",       "red trained/cipher-red-planner-v2"),
-        "RED Analyst v1":        os.getenv("RED_ANALYST_LORA_PATH",        "red trained/cipher-red-analyst-v1"),
-        "BLUE Surveillance v1":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",  "blue trained/cipher-blue-surveillance-v1"),
-        "BLUE ThreatHunter v1":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
+        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v3"),
+        "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
+        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v2"),
+        "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
     }
     console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
     for name, path in specialists.items():
         if os.path.exists(path):
-            console.print(f"    [green]✓[/green] {name}: {path}")
+            console.print(f"    [green]✓[/green] {name}: [dim]{path}[/dim]")
         else:
-            console.print(f"    [yellow]⚠[/yellow]  {name} NOT FOUND at '{path}' — falling back to NVIDIA NIM")
+            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use NVIDIA NIM")
     console.print()
+
 
 
 def main() -> None:
