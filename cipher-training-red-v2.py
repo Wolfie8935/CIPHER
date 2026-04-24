@@ -8,7 +8,8 @@ import torch
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 OUT_DIR     = '/workspace/output'
-CIPHER_PATH = '/workspace/CIPHER/cipher'
+CIPHER_ROOT = '/workspace/CIPHER'          # project root (has requirements.txt)
+CIPHER_PATH = '/workspace/CIPHER'          # sys.path entry so `import cipher` works
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ─── GPU check ────────────────────────────────────────────────────────────────
@@ -33,14 +34,18 @@ def run(cmd):
 
 run('pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" -q')
 run('pip install "trl>=0.12.0" "datasets>=2.19.0" "accelerate>=0.30.0" "peft>=0.11.0" "bitsandbytes>=0.43.0" -q')
+run('pip install "openenv>=0.1.13" python-dotenv pydantic pydantic-settings networkx openai rich colorlog numpy pandas -q')
 
 # ─── Clone CIPHER ─────────────────────────────────────────────────────────────
-if not os.path.exists(CIPHER_PATH):
-    run(f'git clone https://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@github.com/Rishaan08/CIPHER {CIPHER_PATH}')
+if not os.path.exists(CIPHER_ROOT):
+    run(f'git clone https://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@github.com/Rishaan08/CIPHER {CIPHER_ROOT}')
 
+# Add project root to sys.path so `import cipher` resolves the cipher/ package
 if CIPHER_PATH not in sys.path:
     sys.path.insert(0, CIPHER_PATH)
-run(f'pip install -e {CIPHER_PATH} -q')
+
+# Install project dependencies from requirements.txt
+run(f'pip install -r {CIPHER_ROOT}/requirements.txt -q')
 os.environ['LLM_MODE'] = 'stub'
 
 # ─── Verify env ───────────────────────────────────────────────────────────────
