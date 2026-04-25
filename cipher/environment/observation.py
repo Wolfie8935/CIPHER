@@ -529,11 +529,13 @@ def _generate_step_anomalies(state: EpisodeState) -> list[AnomalyEvent]:
             z = state.graph.nodes[noise_node].get("zone")
             noise_zone = z.value if hasattr(z, "value") else z
 
+        # Noise anomalies have lower severity than real ones so
+        # BLUE can learn to distinguish signal from noise by severity
         anomalies.append(
             AnomalyEvent(
-                event_type=random.choice(ANOMALY_TYPES[:4]),  # noise uses base types
+                event_type=random.choice(ANOMALY_TYPES[:4]),
                 node_id=noise_node,
-                severity=round(random.uniform(0.05, 0.35), 3),
+                severity=round(random.uniform(0.02, 0.25), 3),
                 is_red_planted=False,
                 step=state.step,
                 zone=noise_zone,

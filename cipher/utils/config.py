@@ -112,12 +112,24 @@ class CipherConfig(BaseSettings):
     # ── Environment parameters ────────────────────────────────────
     env_graph_size: int = Field(50, description="Number of nodes in enterprise network")
     env_max_steps: int = Field(200, description="Max steps per episode")
-    env_context_reset_interval: int = Field(40, description="Steps between RED context resets")
-    env_honeypot_density: float = Field(0.15, description="Fraction of assets that are honeypots")
-    env_anomaly_feed_noise: float = Field(0.2, description="BLUE false positive rate in raw feed")
-    env_dead_drop_max_tokens: int = Field(512, description="Max size of each dead drop file")
-    env_trap_budget_red: int = Field(3, description="Max traps RED can place per episode")
-    env_trap_budget_blue: int = Field(5, description="Max honeypots BLUE can maintain")
+    env_context_reset_interval: int = Field(
+        40, description="Steps between RED context resets"
+    )
+    env_honeypot_density: float = Field(
+        0.15, description="Fraction of assets that are honeypots"
+    )
+    env_anomaly_feed_noise: float = Field(
+        0.10, description="BLUE false positive rate in raw feed (reduced from 0.2 to give BLUE usable signal)"
+    )
+    env_dead_drop_max_tokens: int = Field(
+        512, description="Max size of each dead drop file"
+    )
+    env_trap_budget_red: int = Field(
+        3, description="Max traps RED can place per episode"
+    )
+    env_trap_budget_blue: int = Field(
+        5, description="Max honeypots BLUE can maintain"
+    )
 
     # ── Reward weights ────────────────────────────────────────────
     reward_red_exfil_weight: float = Field(0.5)

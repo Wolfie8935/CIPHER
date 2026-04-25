@@ -242,28 +242,63 @@ def _mini_bar(val: float, width: int = 20) -> str:
     return f"[{col}]{'█' * filled}{'░' * (width - filled)}[/{col}] {val:.0%}"
 
 
+def _compute_zone_stall(state: Any) -> int:
+    """Count consecutive steps RED has been in the current zone."""
+    current_zone = int(getattr(state, "red_current_zone", 0))
+    path = list(getattr(state, "red_path_history", []))
+    graph = getattr(state, "graph", None)
+    if not path or graph is None:
+        return 0
+    stall = 0
+    for node in reversed(path):
+        try:
+            z_raw = graph.nodes[node].get("zone")
+            z = z_raw.value if hasattr(z_raw, "value") else int(z_raw)
+        except Exception:
+            break
+        if z == current_zone:
+            stall += 1
+        else:
+            break
+    return stall
+
+
 def _print_live_step(step: int, max_steps: int, red_actions: list,
                      blue_actions: list, state: Any, elapsed_s: float) -> None:
     """ANSI step ticker for live/hybrid (G.md Change 3 — colours + timer)."""
     # Red planner's primary action
-    red_plain = "waiting…"
-    atype_lower = ""
+    red_emergent_intent: str = ""
+    red_info = "[dim]waiting…[/dim]"
     for a in red_actions:
         if a and a.agent_id.startswith("red_planner"):
             atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
             atype_lower = str(atype).lower()
             node = f" → n{a.target_node}" if a.target_node is not None else ""
             file_ = f" [{a.target_file[:18]}]" if a.target_file else ""
-            red_plain = f"{atype}{node}{file_}"
+            if atype == "emergent" and a.emergent_data:
+                red_emergent_intent = a.emergent_data.intent
+                red_info = f"[bold red]emergent:{red_emergent_intent}{node}[/bold red]"
+            else:
+                red_info = f"[red]{atype}{node}{file_}[/red]"
             break
 
+    # Blue dominant action — flag if any BLUE used emergent
     blue_counts: dict[str, int] = {}
+    blue_emergent_intents: list[str] = []
     for a in blue_actions:
         if a:
             k = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
             blue_counts[k] = blue_counts.get(k, 0) + 1
-    blue_plain = " ".join(f"{k}×{v}" for k, v in blue_counts.items()) or "—"
+            if k == "emergent" and a.emergent_data:
+                blue_emergent_intents.append(a.emergent_data.intent)
 
+    blue_parts = []
+    for k, v in blue_counts.items():
+        style = "bold blue" if k == "emergent" else "blue"
+        blue_parts.append(f"[{style}]{k}×{v}[/{style}]")
+    blue_info = " ".join(blue_parts) or "[dim]—[/dim]"
+
+    # Current zone and stall
     zone = getattr(state, "red_current_zone", None)
     if zone is None:
         try:
@@ -277,27 +312,68 @@ def _print_live_step(step: int, max_steps: int, red_actions: list,
     detection = float(getattr(state, "blue_detection_confidence", 0.0))
     exfil_count = len(getattr(state, "red_exfiltrated_files", []))
 
-    est_total = f"~{int(elapsed_s / step * max_steps)}s total" if step > 0 else "?"
+    # ── Compute active feature flags ──────────────────────────────
+    zone_stall = _compute_zone_stall(state)
+    stuck_hint_active = suspicion > 0.60 and zone_stall >= 3
+    low_det_hint_active = detection < 0.40 and step > 10
 
-    if "exfil" in atype_lower or exfil_count > 0:
-        print(
-            f"{GREEN_ANSI}{'█' * 20} EXFILTRATION / EXFIL ACTION {'█' * 20}{RESET_ANSI}",
-            flush=True,
-        )
+    danger_nodes: dict = {}
+    try:
+        from cipher.agents.red.coordination import get_danger_nodes
+        danger_nodes = get_danger_nodes(threshold=0.4)
+    except Exception:
+        pass
 
-    red_col = f"{RED_ANSI}{red_plain}{RESET_ANSI}"
-    blue_col = f"{BLUE_ANSI}{blue_plain}{RESET_ANSI}"
-    line = (
-        f"  {DIM_ANSI}Step {step:02d}/{max_steps}{RESET_ANSI}  "
-        f"{DIM_ANSI}{elapsed_s:5.1f}s{RESET_ANSI}  "
-        f"{DIM_ANSI}[est: {est_total}]{RESET_ANSI}  "
-        f"Zone {GOLD_ANSI}◆ {zone_plain}{RESET_ANSI}  "
-        f"RED: {red_col}  │  BLUE: {blue_col}  │  "
-        f"Susp {RED_ANSI}{suspicion:.0%}{RESET_ANSI}  "
-        f"Det {BLUE_ANSI}{detection:.0%}{RESET_ANSI}"
-        + (f"  {GREEN_ANSI}✓ {exfil_count} exfil'd{RESET_ANSI}" if exfil_count else "")
+    consec_losses = 0
+    try:
+        from cipher.training.episode_memory import count_consecutive_losses
+        consec_losses = count_consecutive_losses("red")
+    except Exception:
+        pass
+
+    # Build FLAGS line — only print when at least one flag is active
+    flags: list[str] = []
+    if zone_stall >= 6:
+        flags.append(f"[bold yellow]⚠ ZONE STALL ×{zone_stall}[/bold yellow]")
+    elif zone_stall >= 3:
+        flags.append(f"[yellow]stall×{zone_stall}[/yellow]")
+    if stuck_hint_active:
+        flags.append("[bold magenta]STUCK hint → emergent suggested[/bold magenta]")
+    if low_det_hint_active:
+        flags.append("[magenta]LOW-DET hint → emergent suggested[/magenta]")
+    if danger_nodes:
+        flags.append(f"[yellow]danger_map:{len(danger_nodes)} node(s)[/yellow]")
+    if consec_losses >= 3:
+        flags.append(f"[bold orange3]EXPLORE↑ temp=0.9 ({consec_losses} losses)[/bold orange3]")
+    if red_emergent_intent:
+        flags.append(f"[bold green]RED emergent→{red_emergent_intent}[/bold green]")
+    if blue_emergent_intents:
+        flags.append(f"[bold cyan]BLUE emergent→{', '.join(blue_emergent_intents)}[/bold cyan]")
+
+    # Estimated total time
+    est_total = f"~{int(elapsed_s / step * max_steps)}s" if step > 0 else "?"
+
+    step_line = (
+        f"  [bold white]Step {step:02d}/{max_steps}[/bold white]  "
+        f"[dim]{elapsed_s:4.1f}s[/dim] [dim]est:{est_total}[/dim]  "
+        f"Zone {_zone_badge(zone)}  "
+        f"RED: {red_info}  │  "
+        f"BLUE: {blue_info}  │  "
+        f"Susp [red]{suspicion:.0%}[/red]  "
+        f"Det [blue]{detection:.0%}[/blue]"
+        + (f"  [bold green]✓ {exfil_count} exfil'd[/bold green]" if exfil_count else "")
     )
-    print(line, flush=True)
+    console.print(step_line)
+
+    # Feature flags line — shows exactly which new intelligence features fired this step
+    if flags:
+        console.print(f"  [dim]  └─ FLAGS:[/dim] {' │ '.join(flags)}")
+
+    # Exfiltration success banner
+    if exfil_count > 0:
+        console.print(
+            f"  [bold red]{'█' * 18} EXFILTRATION IN PROGRESS — {exfil_count} FILE(S) STOLEN {'█' * 18}[/bold red]"
+        )
 
 
 def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") -> None:
@@ -382,10 +458,16 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
 
         elif action_type == "trigger_alert" and agent_id.startswith("blue_"):
             correct = res.get("correct_alert", False)
+            near_miss = res.get("near_miss", False)
             if correct:
                 key_events.append(
                     f"  Step {step:02d} | [bold blue]BLUE ALERT[/bold blue] "
                     f"[green]CORRECT[/green] — RED agent located and flagged!"
+                )
+            elif near_miss:
+                key_events.append(
+                    f"  Step {step:02d} | [blue]BLUE alert[/blue] "
+                    f"[cyan]NEAR MISS[/cyan] — 1 hop away from RED!"
                 )
             else:
                 key_events.append(
@@ -443,19 +525,37 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
         console.print("  [bold white]── REWARD BREAKDOWN ──[/bold white]")
         # RED
         rr = red_reward
+        red_em = getattr(rr, "emergent_action_bonus", 0.0)
+        red_em_str = (
+            f"  [bold green]emergent_bonus={red_em:+.3f}[/bold green]"
+            if red_em > 0 else ""
+        )
         console.print(
             f"  [red]RED[/red]   total=[bold]{rr.total:+.3f}[/bold]  "
             f"exfil={getattr(rr,'exfiltration_completeness',0.0):+.3f}  "
             f"stealth={1.0 - getattr(rr,'detection_probability',0.0):+.3f}  "
+            f"complexity={getattr(rr,'operation_complexity_multiplier',1.0):.2f}x  "
             f"abort_pen={getattr(rr,'abort_penalty',0.0):+.3f}"
+            + red_em_str
         )
         # BLUE
         br = blue_reward
+        blue_em = getattr(br, "emergent_action_bonus", 0.0)
+        blue_em_str = (
+            f"  [bold green]emergent_bonus={blue_em:+.3f}[/bold green]"
+            if blue_em > 0 else ""
+        )
+        blue_inv_eff = getattr(br, "investigation_effectiveness", 0.0)
+        blue_inv_str = (
+            f"  [bold cyan]inv_eff={blue_inv_eff:+.3f}[/bold cyan]"
+            if blue_inv_eff > 0 else ""
+        )
         console.print(
             f"  [blue]BLUE[/blue]  total=[bold]{br.total:+.3f}[/bold]  "
             f"detection={getattr(br,'detection_accuracy_score',0.0):+.3f}  "
             f"honeypot={getattr(br,'honeypot_trigger_rate',0.0):+.3f}  "
             f"fp_pen={getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
+            + blue_em_str + blue_inv_str
         )
         if judgment:
             verdict = getattr(judgment, "episode_verdict", "?")
@@ -1016,6 +1116,23 @@ def main() -> None:
         # For live/hybrid: inject a per-step callback so we print progress as it happens
         step_callback = None
         if mode in ("live", "hybrid"):
+            # Show episode memory summary so it's clear agents received it
+            try:
+                from cipher.training.episode_memory import get_recent_summary, count_consecutive_losses
+                ep_mem = get_recent_summary(n=3)
+                if ep_mem:
+                    console.print("  [bold cyan]── EPISODE MEMORY (injected into agent prompts) ──[/bold cyan]")
+                    for mem_line in ep_mem.splitlines():
+                        console.print(f"  [cyan]{mem_line}[/cyan]")
+                    console.print()
+                losses = count_consecutive_losses("red")
+                if losses >= 3:
+                    console.print(
+                        f"  [bold orange3]⚡ EXPLORATION PRESSURE: RED lost {losses} in a row "
+                        f"→ temperature raised to 0.9 + exploration directive injected[/bold orange3]\n"
+                    )
+            except Exception:
+                pass
             console.print(
                 f"  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n"
             )

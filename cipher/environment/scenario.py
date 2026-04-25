@@ -99,6 +99,28 @@ class ScenarioGenerator:
         self._episode_count: int = 0
         logger.debug("ScenarioGenerator initialized (Phase 2 — auto-escalating)")
 
+    def _get_recent_win_rate(self, n: int = 5) -> float:
+        """Read last N episodes from rewards_log.csv and compute RED win rate.
+
+        Used only to bootstrap difficulty at the start of a fresh run (before
+        any in-run win history is available).  Returns 0.5 on any error.
+        """
+        import csv
+        from pathlib import Path
+        csv_path = Path("rewards_log.csv")
+        if not csv_path.exists():
+            return 0.5
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            recent = rows[-n:]
+            if not recent:
+                return 0.5
+            red_wins = sum(1 for r in recent if float(r.get("red_total", 0)) > 0.5)
+            return red_wins / len(recent)
+        except Exception:
+            return 0.5
+
     def generate(self, episode_number: int) -> Scenario:
         """
         Generate an auto-escalating scenario for the given episode number.
@@ -113,6 +135,22 @@ class ScenarioGenerator:
             A Scenario configuration for the episode.
         """
         self._episode_count = episode_number
+
+        # Bootstrap difficulty from prior-run CSV when no in-run history exists.
+        # This makes the curriculum self-correcting across separate runs without
+        # fighting the in-run escalate_difficulty() controller.
+        if not self._win_history:
+            win_rate = self._get_recent_win_rate()
+            if win_rate > 0.70:
+                self._difficulty_curve = min(0.9, self._difficulty_curve + 0.05)
+                logger.debug(
+                    f"CSV bootstrap: RED win rate {win_rate:.0%} → difficulty raised to {self._difficulty_curve:.2f}"
+                )
+            elif win_rate < 0.30:
+                self._difficulty_curve = max(0.20, self._difficulty_curve - 0.05)
+                logger.debug(
+                    f"CSV bootstrap: RED win rate {win_rate:.0%} → difficulty lowered to {self._difficulty_curve:.2f}"
+                )
 
         # Deterministic seed from episode number
         episode_seed = episode_number * 7919 + 42  # prime-based mixing

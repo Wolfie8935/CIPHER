@@ -33,27 +33,36 @@ class BlueSurveillance(BaseAgent):
             return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                          reasoning="No observation — standing down.")
 
-        # If honeypots triggered — high confidence alert
+        # If honeypots triggered — investigate neighbors instead of blind alerting.
+        # RED has likely already moved past the honeypot node.
         if obs.honeypots_triggered_this_step:
             target = obs.honeypots_triggered_this_step[0]
-            return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
+            return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
                          target_node=target,
-                         reasoning=f"Honeypot {target} triggered — issuing alert.")
+                         reasoning=f"Honeypot {target} triggered — investigating (RED likely 1-2 hops away).")
 
-        # Analyze anomalies if present
+        # Alternate between analysis and investigation to build confidence
         if obs.anomaly_feed:
+            # High-severity anomalies → investigate directly (faster confidence gain)
+            high_sev = [a for a in obs.anomaly_feed if a.severity >= 0.40 and a.node_id is not None]
+            if high_sev:
+                target = max(high_sev, key=lambda a: a.severity).node_id
+                return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
+                             target_node=target,
+                             reasoning=f"High-severity anomaly at node {target} — investigating directly.")
+
+            # Lower-severity → analyze to filter noise
             worst = max(obs.anomaly_feed, key=lambda a: a.severity)
             return Action(agent_id=self.agent_id, action_type=ActionType.ANALYZE_ANOMALY,
                          target_node=worst.node_id,
-                         reasoning=f"Analyzing anomaly at node {worst.node_id} "
-                                  f"(severity={worst.severity:.2f}).")
+                         reasoning=f"Analyzing anomaly at node {worst.node_id} (severity={worst.severity:.2f}).")
 
-        # Investigate honeypot nodes periodically
-        if obs.active_honeypots and self.step_count % 5 == 0:
+        # Zone-3 sweep: critical zone gets periodic investigation
+        if obs.active_honeypots and self.step_count % 3 == 0:
             target = random.choice(obs.active_honeypots)
             return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
                          target_node=target,
-                         reasoning=f"Routine check on honeypot node {target}.")
+                         reasoning=f"Routine sweep of honeypot node {target}.")
 
         return Action(agent_id=self.agent_id, action_type=ActionType.STAND_DOWN,
                      reasoning="No anomalies detected — maintaining passive surveillance.")
