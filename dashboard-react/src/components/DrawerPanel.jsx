@@ -30,9 +30,14 @@ function stepsToEvents(steps) {
 
 export default function DrawerPanel({ thoughts, steps, isOpen, onToggle }) {
   const [tab, setTab] = useState('thoughts');
+  const [teamFilter, setTeamFilter] = useState('all');
   const events = stepsToEvents(steps);
   const redT   = thoughts.filter(t => t.team === 'red');
   const blueT  = thoughts.filter(t => t.team === 'blue');
+  const recentThoughts = [...thoughts]
+    .reverse()
+    .filter(t => teamFilter === 'all' || t.team === teamFilter)
+    .slice(0, 24);
 
   return (
     <div className={`side-drawer${isOpen ? '' : ' closed'}`}>
@@ -65,18 +70,49 @@ export default function DrawerPanel({ thoughts, steps, isOpen, onToggle }) {
       {/* Thoughts */}
       {tab === 'thoughts' && (
         <div className="thought-list">
+          <div className="thought-toolbar">
+            <div className="thought-counts">
+              <span className="count-pill all">ALL {thoughts.length}</span>
+              <span className="count-pill red">RED {redT.length}</span>
+              <span className="count-pill blue">BLUE {blueT.length}</span>
+            </div>
+            <div className="thought-filters">
+              {[
+                ['all', 'All'],
+                ['red', 'Red'],
+                ['blue', 'Blue'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  className={`thought-filter-btn${teamFilter === id ? ' active' : ''}`}
+                  onClick={() => setTeamFilter(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {thoughts.length === 0 && (
             <div style={{ padding: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mute)', fontStyle: 'italic' }}>
               Awaiting agent reasoning…
             </div>
           )}
-          {[...thoughts].reverse().slice(0, 20).map((t, i) => (
+          {recentThoughts.map((t, i) => (
             <div key={`${t.agent_id}-${t.step}-${i}`} className={`thought-item ${t.team}`}>
-              <div className="thought-who">
-                {AGENT_SHORT[t.agent_id] ?? t.agent_id?.replace(/_\d+$/, '').toUpperCase()}
-                <span style={{ opacity: 0.5, fontWeight: 400, marginLeft: 6 }}>s{t.step}</span>
+              <div className="thought-meta">
+                <span className={`thought-team-badge ${t.team}`}>
+                  {t.team?.toUpperCase() ?? 'AGENT'}
+                </span>
+                <span className="thought-who">
+                  {AGENT_SHORT[t.agent_id] ?? t.agent_id?.replace(/_\d+$/, '').toUpperCase()}
+                </span>
+                <span className="thought-step">STEP {t.step}</span>
               </div>
-              <div className="thought-body">{t.reasoning?.slice(0, 140)}{(t.reasoning?.length ?? 0) > 140 ? '…' : ''}</div>
+              <div className="thought-body">
+                {t.reasoning?.slice(0, 180)}
+                {(t.reasoning?.length ?? 0) > 180 ? '…' : ''}
+              </div>
               {t.action_type && (
                 <div className="thought-action">
                   {ACT_ICONS[t.action_type] ?? '•'} {t.action_type.replace(/_/g, ' ')}
@@ -90,20 +126,32 @@ export default function DrawerPanel({ thoughts, steps, isOpen, onToggle }) {
       {/* Feed */}
       {tab === 'feed' && (
         <div className="feed-list">
+          <div className="feed-terminal-head">
+            <span className="term-dot red" />
+            <span className="term-dot amber" />
+            <span className="term-dot green" />
+            <span className="term-title">live_event_stream.log</span>
+            <span className="term-state">STREAMING</span>
+          </div>
           {events.length === 0 && (
-            <div style={{ padding: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mute)', fontStyle: 'italic' }}>
-              Awaiting events…
+            <div className="feed-empty">
+              [waiting] no events yet...
             </div>
           )}
           {events.map((e, i) => (
-            <div key={e.id} className={`feed-row${e.critical ? ' alert' : ''}`} style={{ opacity: 1 - i * 0.012 }}>
-              <div className={`feed-dot ${e.team}`} />
-              <span className="feed-time">{e.ts}</span>
-              <span className="feed-desc" style={{ color: e.team === 'red' ? 'rgba(255,150,150,0.8)' : e.team === 'blue' ? 'rgba(100,200,255,0.8)' : 'var(--text-dim)' }}>
-                {e.text}
-              </span>
+            <div key={e.id} className={`feed-row terminal${e.critical ? ' alert' : ''}`} style={{ opacity: 1 - i * 0.012 }}>
+              <span className="feed-gutter">{'>'}</span>
+              <span className="feed-time">[{e.ts}]</span>
+              <span className={`feed-team ${e.team}`}>{e.team === 'red' ? 'RED' : 'BLUE'}</span>
+              <span className={`feed-desc ${e.team}`}>{e.text}</span>
             </div>
           ))}
+          {events.length > 0 && (
+            <div className="feed-cursor-row">
+              <span className="feed-gutter">{'>'}</span>
+              <span className="feed-cursor">_</span>
+            </div>
+          )}
         </div>
       )}
     </div>

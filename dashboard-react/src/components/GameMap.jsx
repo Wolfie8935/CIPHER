@@ -82,16 +82,231 @@ function extractRedNode(step) {
   return m ? Number(m[1]) : null;
 }
 
+function getNodeFiles(node) {
+  const files = Array.isArray(node?.files) ? node.files : [];
+  return files
+    .map((f) => {
+      if (typeof f === 'string') return f.trim();
+      if (f && typeof f === 'object') return String(f.name ?? f.path ?? f.file ?? '').trim();
+      return '';
+    })
+    .filter(Boolean);
+}
+
+function normalizeFileName(name) {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+function extractFileNames(value) {
+  if (value == null) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => extractFileNames(item));
+  }
+  if (typeof value === 'object') {
+    const candidate = value.name ?? value.file ?? value.path ?? value.filename ?? value.target_file;
+    if (typeof candidate === 'string' && candidate.trim()) return [candidate.trim()];
+  }
+  return [];
+}
+
+function collectStepFileNamesByPaths(steps, paths) {
+  const names = new Set();
+  for (const step of steps ?? []) {
+    for (const path of paths) {
+      let value = step;
+      for (const key of path) {
+        if (value == null) break;
+        value = value[key];
+      }
+      for (const fileName of extractFileNames(value)) {
+        const normalized = normalizeFileName(fileName);
+        if (normalized) names.add(normalized);
+      }
+    }
+  }
+  return names;
+}
+
+function buildDefinitiveObjectiveFileSet(steps) {
+  const explicitObjectivePaths = [
+    ['objective_files'],
+    ['target_files'],
+    ['red_target_files'],
+    ['red_objective_files'],
+    ['objective', 'files'],
+    ['objectives', 'files'],
+    ['red_objective', 'files'],
+    ['red_objectives', 'files'],
+    ['payload', 'objective_files'],
+    ['payload', 'target_files'],
+    ['payload', 'red_target_files'],
+    ['payload', 'red_objective_files'],
+    ['payload', 'objective', 'files'],
+    ['payload', 'red_objective', 'files'],
+    ['live', 'objective_files'],
+    ['live', 'target_files'],
+    ['replay', 'objective_files'],
+    ['replay', 'target_files'],
+  ];
+  const explicitObjectives = collectStepFileNamesByPaths(steps, explicitObjectivePaths);
+  if (explicitObjectives.size > 0) return explicitObjectives;
+
+  const confirmedExfilTargetPaths = [
+    ['confirmed_exfil_targets'],
+    ['red_confirmed_targets'],
+    ['red_exfil_targets'],
+    ['exfil_target_files'],
+    ['payload', 'confirmed_exfil_targets'],
+    ['payload', 'red_confirmed_targets'],
+    ['payload', 'red_exfil_targets'],
+    ['payload', 'exfil_target_files'],
+    ['metadata', 'confirmed_exfil_targets'],
+    ['metadata', 'red_exfil_targets'],
+    ['exfil_files'],
+  ];
+  return collectStepFileNamesByPaths(steps, confirmedExfilTargetPaths);
+}
+
+const BLUE_TRAP_ACTIONS = new Set([
+  'place_honeypot',
+  'plant_breadcrumb',
+  'plant_temporal_decoy',
+  'tamper_dead_drop',
+  'plant_honeypot_poison',
+]);
+
+const RED_DEAD_DROP_ACTIONS = new Set([
+  'write_dead_drop',
+  'tamper_dead_drop',
+]);
+
+function actionToken(raw) {
+  return String(raw ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, '_');
+}
+
+function parseNodeId(value) {
+  if (value == null) return null;
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+  const m = String(value).match(/(?:→\s*)?n(?:ode)?[_\s-]?(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function parseActionList(text) {
+  if (!text) return [];
+  return String(text)
+    .toLowerCase()
+    .split(/\s+/)
+    .map((chunk) => chunk.replace(/×\d+$/i, '').replace(/[^\w]/g, ''))
+    .filter(Boolean);
+}
+
+function extractOperationalMarkers(steps, redThoughts, blueThoughts) {
+  const traps = [];
+  const deadDrops = [];
+  const seen = new Set();
+
+  for (const s of steps ?? []) {
+    const stepNo = Number(s?.step ?? 0);
+
+    const redAct = actionToken(s?.red_action);
+    const redNode = parseNodeId(s?.red_node ?? s?.target_node ?? s?.red_action);
+    if (RED_DEAD_DROP_ACTIONS.has(redAct) && redNode != null) {
+      const key = `r-${stepNo}-${redNode}-${redAct}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deadDrops.push({ nodeId: redNode, step: stepNo, action: redAct });
+      }
+    }
+
+    const blueTokens = parseActionList(s?.blue_actions);
+    const hasTrapAction = blueTokens.some((tok) => BLUE_TRAP_ACTIONS.has(tok));
+    const blueNode = parseNodeId(s?.blue_node ?? s?.target_node);
+    if (hasTrapAction && blueNode != null) {
+      const key = `b-${stepNo}-${blueNode}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        traps.push({ nodeId: blueNode, step: stepNo, action: blueTokens.find((tok) => BLUE_TRAP_ACTIONS.has(tok)) });
+      }
+    }
+  }
+
+  for (const t of blueThoughts ?? []) {
+    const act = actionToken(t?.action_type);
+    const node = parseNodeId(t?.target_node);
+    if (!BLUE_TRAP_ACTIONS.has(act) || node == null) continue;
+    const key = `tb-${t?.step ?? 'x'}-${node}-${act}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    traps.push({ nodeId: node, step: Number(t?.step ?? 0), action: act });
+  }
+
+  for (const t of redThoughts ?? []) {
+    const act = actionToken(t?.action_type);
+    const node = parseNodeId(t?.target_node);
+    if (!RED_DEAD_DROP_ACTIONS.has(act) || node == null) continue;
+    const key = `tr-${t?.step ?? 'x'}-${node}-${act}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deadDrops.push({ nodeId: node, step: Number(t?.step ?? 0), action: act });
+  }
+
+  traps.sort((a, b) => a.step - b.step);
+  deadDrops.sort((a, b) => a.step - b.step);
+  return {
+    trapMarkers: traps.slice(-8),
+    deadDropMarkers: deadDrops.slice(-8),
+  };
+}
+
 // ─── Agent dot component ─────────────────────────────────────────
-function AgentDot({ x, y, color, radius, label, pulseFast, filter }) {
+function AgentDot({ x, y, color, radius, label, pulseFast, filter, team = 'neutral', roleIndex = 0 }) {
   if (!x || !y) return null;
+  const ringOpacity = team === 'red' ? 0.34 - pulseFast * 0.11 : 0.28 - pulseFast * 0.1;
+  const ringRadius = radius + 9 + pulseFast * (team === 'red' ? 12 : 8);
+  const accentSize = radius + 3 + roleIndex * 0.2;
   return (
     <g filter={filter}>
-      <circle cx={x} cy={y} r={radius + 8 + pulseFast * 10}
+      <circle cx={x} cy={y} r={ringRadius}
         fill="none" stroke={color}
-        strokeWidth={1} strokeOpacity={0.25 - pulseFast * 0.1}
+        strokeWidth={1.1} strokeOpacity={ringOpacity}
       />
-      <circle cx={x} cy={y} r={radius + 4} fill={`${color}22`} />
+      <circle cx={x} cy={y} r={radius + 4} fill={`${color}26`} />
+      {team === 'blue' ? (
+        <polygon
+          points={[
+            `${x},${y - accentSize}`,
+            `${x + accentSize * 0.72},${y - accentSize * 0.38}`,
+            `${x + accentSize * 0.72},${y + accentSize * 0.38}`,
+            `${x},${y + accentSize}`,
+            `${x - accentSize * 0.72},${y + accentSize * 0.38}`,
+            `${x - accentSize * 0.72},${y - accentSize * 0.38}`,
+          ].join(' ')}
+          fill="none"
+          stroke="rgba(120,180,255,0.75)"
+          strokeWidth={1}
+          strokeDasharray="3 4"
+        />
+      ) : (
+        <rect
+          x={x - accentSize * 0.72}
+          y={y - accentSize * 0.72}
+          width={accentSize * 1.44}
+          height={accentSize * 1.44}
+          fill="none"
+          stroke="rgba(255,120,120,0.78)"
+          strokeWidth={1}
+          transform={`rotate(45 ${x} ${y})`}
+        />
+      )}
       <circle cx={x} cy={y} r={radius}
         fill={color}
         stroke="rgba(255,255,255,0.5)"
@@ -118,6 +333,7 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
   const lastMouse    = useRef({ x: 0, y: 0 });
   const [hovered,  setHovered]  = useState(null);
   const [selected, setSelected] = useState(null);
+  const [hoveredAgent, setHoveredAgent] = useState(null);
 
   // Pulse timer
   const [tick, setTick] = useState(0);
@@ -144,6 +360,16 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
   }, [steps]);
 
   const visited = useMemo(() => new Set(trail), [trail]);
+  const visibleTrail = useMemo(() => trail.slice(-10), [trail]);
+  const trailSegments = useMemo(() => {
+    const segs = [];
+    for (let i = 1; i < visibleTrail.length; i += 1) {
+      const a = positions[visibleTrail[i - 1]];
+      const b = positions[visibleTrail[i]];
+      if (a && b) segs.push({ a, b, idx: i - 1 });
+    }
+    return segs;
+  }, [visibleTrail, positions]);
 
   // 4 RED agents — staggered along trail
   const RED_LABELS  = ['PLNR', 'ANLT', 'OPRT', 'EXFL'];
@@ -181,6 +407,15 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
 
   const latestRed  = redThoughts[redThoughts.length - 1];
   const latestBlue = blueThoughts[blueThoughts.length - 1];
+  const infoNodeId = selected ?? hovered;
+  const { trapMarkers, deadDropMarkers } = useMemo(
+    () => extractOperationalMarkers(steps, redThoughts, blueThoughts),
+    [steps, redThoughts, blueThoughts],
+  );
+  const definitiveObjectiveFiles = useMemo(
+    () => buildDefinitiveObjectiveFileSet(steps),
+    [steps],
+  );
 
   // ── Pan / zoom ───────────────────────────────────────────────────
   const onWheel = useCallback((e) => {
@@ -235,6 +470,14 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
         style={{ display: 'block' }}
       >
         <defs>
+          {Z.map((z, i) => (
+            <radialGradient key={`zone-grad-${i}`} id={`zoneGrad${i}`} cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={z.color} stopOpacity="0.22" />
+              <stop offset="45%" stopColor={z.color} stopOpacity="0.10" />
+              <stop offset="75%" stopColor={z.color} stopOpacity="0.04" />
+              <stop offset="100%" stopColor="#080c16" stopOpacity="0" />
+            </radialGradient>
+          ))}
           <filter id="redGlow" x="-100%" y="-100%" width="300%" height="300%">
             <feGaussianBlur stdDeviation="12" result="blur" />
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -260,7 +503,7 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
         <g transform={`translate(${pan.x + svgW / 2}, ${pan.y + svgH / 2}) scale(${zoom}) translate(${-CX}, ${-CY})`}>
 
           {/* Map background */}
-          <rect x={0} y={0} width={W} height={H} fill="#080a10" />
+          <rect x={0} y={0} width={W} height={H} fill="#101826" />
 
           {/* Subtle grid */}
           <g opacity={0.04}>
@@ -281,6 +524,35 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
               rx={z.rx + 80} ry={z.ry + 70}
               fill={`${z.color}08`}
               filter="url(#zoneBlob)"
+            />
+          ))}
+
+          {/* ── Distinct zone gradients for better separation ── */}
+          {Z.map((z, i) => (
+            <ellipse
+              key={`zone-sep-${i}`}
+              cx={z.cx}
+              cy={z.cy}
+              rx={z.rx + 120}
+              ry={z.ry + 95}
+              fill={`url(#zoneGrad${i})`}
+              opacity={0.95}
+            />
+          ))}
+
+          {/* Soft zone boundary rings */}
+          {Z.map((z, i) => (
+            <ellipse
+              key={`zone-ring-${i}`}
+              cx={z.cx}
+              cy={z.cy}
+              rx={z.rx + 88}
+              ry={z.ry + 72}
+              fill="none"
+              stroke={z.color}
+              strokeOpacity={0.14}
+              strokeWidth={1.2}
+              strokeDasharray="7 10"
             />
           ))}
 
@@ -331,6 +603,38 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             );
           })}
 
+          {/* ── RED movement path (generated progressively as it moves) ── */}
+          {trailSegments.map((seg, i) => {
+            const newest = i === trailSegments.length - 1;
+            const recency = (i + 1) / Math.max(1, trailSegments.length);
+            return (
+              <g key={`trail-seg-${seg.idx}`}>
+                <line
+                  x1={seg.a.x}
+                  y1={seg.a.y}
+                  x2={seg.b.x}
+                  y2={seg.b.y}
+                  stroke="rgba(255,68,68,0.28)"
+                  strokeWidth={6}
+                  strokeLinecap="round"
+                  opacity={0.35 + recency * 0.35}
+                />
+                <line
+                  x1={seg.a.x}
+                  y1={seg.a.y}
+                  x2={seg.b.x}
+                  y2={seg.b.y}
+                  stroke={newest ? 'rgba(255,120,120,0.98)' : 'rgba(255,92,92,0.72)'}
+                  strokeWidth={newest ? 3.2 : 2.2}
+                  strokeLinecap="round"
+                  strokeDasharray={newest ? '4 4' : '6 7'}
+                  opacity={0.5 + recency * 0.45}
+                  filter={newest ? 'url(#redGlow)' : undefined}
+                />
+              </g>
+            );
+          })}
+
           {/* ── Nodes — colored by zone, semi-transparent ── */}
           {nodes.map((node) => {
             const id   = Number(node.id);
@@ -345,6 +649,9 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             const isCurrent  = id === currentRedNode;
             const isHov      = id === hovered;
             const isSel      = id === selected;
+            const nodeFileNames = getNodeFiles(node).map(normalizeFileName).filter(Boolean);
+            const hasTargetFiles = definitiveObjectiveFiles.size > 0
+              && nodeFileNames.some((fileName) => definitiveObjectiveFiles.has(fileName));
 
             const r = isHVT ? 22 : isEntry ? 18 : 14;
 
@@ -397,6 +704,40 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
                   filter={(isVisited || isCurrent) ? 'url(#nodeGlow)' : undefined}
                 />
 
+                {hasTargetFiles && (
+                  <>
+                    <circle
+                      cx={p.x}
+                      cy={p.y}
+                      r={r + 5}
+                      fill="none"
+                      stroke="rgba(255, 215, 64, 0.62)"
+                      strokeWidth={1}
+                      strokeDasharray="2 4"
+                    />
+                    <g>
+                      <circle
+                        cx={p.x + r - 2}
+                        cy={p.y - r + 2}
+                        r={6}
+                        fill="rgba(20,26,42,0.95)"
+                        stroke="rgba(255,215,64,0.8)"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={p.x + r - 2}
+                        y={p.y - r + 4}
+                        textAnchor="middle"
+                        fontSize={7}
+                        fontFamily="'JetBrains Mono', monospace"
+                        fill="#ffd740"
+                      >
+                        F
+                      </text>
+                    </g>
+                  </>
+                )}
+
                 <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={isHVT ? 12 : 9}>
                   {isHVT ? '⭐' : isEntry ? '🚪' : isHoneypot ? '🪤' : ''}
                 </text>
@@ -416,35 +757,189 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             );
           })}
 
+          {/* ── BLUE trap markers (recent only) ── */}
+          {trapMarkers.map((mk, i) => {
+            const p = positions[mk.nodeId];
+            if (!p) return null;
+            const recency = (i + 1) / Math.max(1, trapMarkers.length);
+            const opacity = 0.22 + recency * 0.62;
+            const rr = 18 + (1 - recency) * 7;
+            return (
+              <g key={`trap-${mk.nodeId}-${mk.step}-${i}`} style={{ pointerEvents: 'none' }}>
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={rr + pulseSlow * 3}
+                  fill="none"
+                  stroke={`rgba(96,170,255,${Math.max(0.14, opacity * 0.42)})`}
+                  strokeWidth={1.2}
+                  strokeDasharray="3 5"
+                />
+                <polygon
+                  points={`${p.x},${p.y - 8} ${p.x + 8},${p.y} ${p.x},${p.y + 8} ${p.x - 8},${p.y}`}
+                  fill={`rgba(88,158,255,${Math.max(0.2, opacity * 0.44)})`}
+                  stroke={`rgba(130,198,255,${Math.min(0.95, opacity)})`}
+                  strokeWidth={1.2}
+                />
+                <text
+                  x={p.x}
+                  y={p.y + 2.8}
+                  textAnchor="middle"
+                  fontSize={7}
+                  fontWeight="700"
+                  fontFamily="'JetBrains Mono', monospace"
+                  fill={`rgba(220,240,255,${Math.min(0.95, opacity)})`}
+                >
+                  T
+                </text>
+              </g>
+            );
+          })}
+
+          {/* ── RED dead-drop markers (recent only) ── */}
+          {deadDropMarkers.map((mk, i) => {
+            const p = positions[mk.nodeId];
+            if (!p) return null;
+            const recency = (i + 1) / Math.max(1, deadDropMarkers.length);
+            const opacity = 0.24 + recency * 0.64;
+            const sz = 9 + recency * 1.8;
+            return (
+              <g key={`dd-${mk.nodeId}-${mk.step}-${i}`} style={{ pointerEvents: 'none' }}>
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={17 + pulseFast * 2.4}
+                  fill="none"
+                  stroke={`rgba(255,94,94,${Math.max(0.16, opacity * 0.48)})`}
+                  strokeWidth={1.15}
+                  strokeDasharray="2 4"
+                />
+                <rect
+                  x={p.x - sz}
+                  y={p.y - sz}
+                  width={sz * 2}
+                  height={sz * 2}
+                  fill={`rgba(255,64,64,${Math.max(0.2, opacity * 0.38)})`}
+                  stroke={`rgba(255,142,142,${Math.min(0.95, opacity)})`}
+                  strokeWidth={1.2}
+                  transform={`rotate(45 ${p.x} ${p.y})`}
+                />
+                <text
+                  x={p.x}
+                  y={p.y + 3}
+                  textAnchor="middle"
+                  fontSize={6.8}
+                  fontWeight="700"
+                  fontFamily="'JetBrains Mono', monospace"
+                  fill={`rgba(255,238,238,${Math.min(0.96, opacity)})`}
+                >
+                  DD
+                </text>
+              </g>
+            );
+          })}
+
           {/* ── 4 BLUE agents ── */}
           {bluePositions.map((bp, i) => {
             if (isCenter(bp)) return null;
+            const agentKey = `blue-${i}`;
+            const agentId = `BLUE ${BLUE_LABELS[i]}`;
             return (
-              <AgentDot
-                key={`blue-${i}`}
-                x={bp.x} y={bp.y}
-                color="#4488ff"
-                radius={BLUE_RADII[i]}
-                label={BLUE_LABELS[i]}
-                pulseFast={pulseFast * (1 - i * 0.15)}
-                filter="url(#blueGlow)"
-              />
+              <g
+                key={agentKey}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHoveredAgent(agentKey)}
+                onMouseLeave={() => setHoveredAgent(null)}
+              >
+                <AgentDot
+                  x={bp.x} y={bp.y}
+                  color="#4488ff"
+                  radius={BLUE_RADII[i]}
+                  label={BLUE_LABELS[i]}
+                  pulseFast={pulseFast * (1 - i * 0.15)}
+                  filter="url(#blueGlow)"
+                  team="blue"
+                  roleIndex={i}
+                />
+                {hoveredAgent === agentKey && (
+                  <foreignObject
+                    x={bp.x + 16}
+                    y={bp.y - 30}
+                    width={120}
+                    height={30}
+                    style={{ overflow: 'visible', pointerEvents: 'none' }}
+                  >
+                    <div style={{
+                      background: 'rgba(10,16,28,0.92)',
+                      border: '1px solid rgba(68,136,255,0.55)',
+                      borderRadius: 7,
+                      padding: '3px 8px',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      color: '#77a7ff',
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
+                      display: 'inline-block',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {agentId}
+                    </div>
+                  </foreignObject>
+                )}
+              </g>
             );
           })}
 
           {/* ── 4 RED agents ── */}
           {redPositions.map((rp, i) => {
             if (isCenter(rp)) return null;
+            const agentKey = `red-${i}`;
+            const agentId = `RED ${RED_LABELS[i]}`;
             return (
-              <AgentDot
-                key={`red-${i}`}
-                x={rp.x} y={rp.y}
-                color={i === 0 ? '#ff2222' : '#ff4444'}
-                radius={RED_RADII[i]}
-                label={RED_LABELS[i]}
-                pulseFast={i === 0 ? pulseFast : pulseFast * (1 - i * 0.18)}
-                filter="url(#redGlow)"
-              />
+              <g
+                key={agentKey}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHoveredAgent(agentKey)}
+                onMouseLeave={() => setHoveredAgent(null)}
+              >
+                <AgentDot
+                  x={rp.x} y={rp.y}
+                  color={i === 0 ? '#ff2222' : '#ff4444'}
+                  radius={RED_RADII[i]}
+                  label={RED_LABELS[i]}
+                  pulseFast={i === 0 ? pulseFast : pulseFast * (1 - i * 0.18)}
+                  filter="url(#redGlow)"
+                  team="red"
+                  roleIndex={i}
+                />
+                {hoveredAgent === agentKey && (
+                  <foreignObject
+                    x={rp.x + 16}
+                    y={rp.y - 30}
+                    width={118}
+                    height={30}
+                    style={{ overflow: 'visible', pointerEvents: 'none' }}
+                  >
+                    <div style={{
+                      background: 'rgba(24,10,10,0.92)',
+                      border: '1px solid rgba(255,68,68,0.55)',
+                      borderRadius: 7,
+                      padding: '3px 8px',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      color: '#ff7575',
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.45)',
+                      display: 'inline-block',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {agentId}
+                    </div>
+                  </foreignObject>
+                )}
+              </g>
             );
           })}
 
@@ -497,14 +992,80 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
           )}
 
           {/* ── Selected node tooltip ── */}
+          {infoNodeId !== null && positions[infoNodeId] && (
+            (() => {
+              const n = nodeMap[infoNodeId];
+              const p = positions[infoNodeId];
+              const files = getNodeFiles(n);
+              if (!n || files.length === 0) return null;
+              const preview = files.slice(0, 4);
+              const more = Math.max(0, files.length - preview.length);
+              return (
+                <foreignObject
+                  x={p.x + 18}
+                  y={p.y - 112}
+                  width={230}
+                  height={106}
+                  style={{ overflow: 'visible', pointerEvents: 'none' }}
+                >
+                  <div
+                    style={{
+                      background: 'rgba(13,18,30,0.94)',
+                      border: '1px solid rgba(255,215,64,0.45)',
+                      borderRadius: 9,
+                      padding: '7px 10px',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      boxShadow: '0 4px 18px rgba(0,0,0,0.45)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: '#ffd740',
+                        marginBottom: 5,
+                      }}
+                    >
+                      Exfil files ({files.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      {preview.map((file) => (
+                        <div
+                          key={file}
+                          style={{
+                            fontSize: 9.5,
+                            color: 'rgba(230,236,246,0.86)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          - {file}
+                        </div>
+                      ))}
+                      {more > 0 && (
+                        <div style={{ fontSize: 8.5, color: 'rgba(255,215,64,0.75)' }}>
+                          +{more} more files
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </foreignObject>
+              );
+            })()
+          )}
+
           {selected !== null && positions[selected] && (
             (() => {
               const n  = nodeMap[selected];
               const p  = positions[selected];
               const z  = Math.min(3, Number(n?.zone ?? 0));
               const zc = Z[z];
+              const files = getNodeFiles(n);
               return (
-                <foreignObject x={p.x + 24} y={p.y - 55} width={215} height={150}
+                <foreignObject x={p.x + 24} y={p.y - 55} width={240} height={210}
                   style={{ overflow: 'visible', pointerEvents: 'all' }}
                   onClick={e => e.stopPropagation()}
                 >
@@ -526,7 +1087,34 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
                       {n?.is_entry    && <span style={{ color: '#69f0ae' }}>🚪 Entry Point</span>}
                       {n?.is_honeypot && <span style={{ color: '#4488ff' }}>🪤 Honeypot</span>}
                       {visited.has(selected) && <span style={{ color: '#ff4444' }}>⬤ Visited by RED</span>}
+                      {files.length > 0 && (
+                        <span style={{ color: '#ffd740' }}>F Exfil Files: {files.length}</span>
+                      )}
                     </div>
+                    {files.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        {files.slice(0, 6).map((file) => (
+                          <div
+                            key={file}
+                            style={{
+                              fontSize: 10,
+                              color: 'rgba(226,232,242,0.86)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                            title={file}
+                          >
+                            - {file}
+                          </div>
+                        ))}
+                        {files.length > 6 && (
+                          <div style={{ fontSize: 9, color: 'rgba(255,215,64,0.72)' }}>
+                            +{files.length - 6} additional files
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ marginTop: 7, fontSize: 9, color: 'rgba(140,160,200,0.4)', cursor: 'pointer' }}
                       onClick={() => setSelected(null)}>✕ close</div>
                   </div>
@@ -557,7 +1145,7 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
 
         {/* ── Agent legend (top-right) ── */}
         <g transform={`translate(${svgW - 155}, 8)`}>
-          <rect x={0} y={0} width={145} height={64} rx={8}
+          <rect x={0} y={0} width={145} height={80} rx={8}
             fill="rgba(10,12,18,0.82)"
             stroke="rgba(140,160,210,0.10)"
             strokeWidth={1}
@@ -571,6 +1159,9 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             BLUE SURV·HUNT·DCVR·FRNS
           </text>
           <text x={14} y={60} fontSize={7.5} fontFamily="'JetBrains Mono', monospace" fill="rgba(140,160,210,0.30)" letterSpacing="0.06em">
+            T = BLUE traps · DD = RED drops
+          </text>
+          <text x={14} y={72} fontSize={7.5} fontFamily="'JetBrains Mono', monospace" fill="rgba(140,160,210,0.30)" letterSpacing="0.06em">
             scroll to zoom · drag to pan
           </text>
         </g>

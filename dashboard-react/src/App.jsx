@@ -3,7 +3,6 @@ import GameMap          from './components/GameMap';
 import SpeedControl     from './components/SpeedControl';
 import StatsHUD         from './components/StatsHUD';
 import DrawerPanel      from './components/DrawerPanel';
-import EpisodeSelector  from './components/EpisodeSelector';
 import ExfilAlertOverlay from './components/ExfilAlertOverlay';
 import { useLivePolling }   from './hooks/useLivePolling';
 import { useThoughts }      from './hooks/useThoughts';
@@ -12,6 +11,7 @@ import { useAgentStatus }   from './hooks/useAgentStatus';
 import { useEpisodeReplay } from './hooks/useEpisodeReplay';
 
 const MODE_LABELS = {
+  idle:   { text: 'IDLE',   color: 'rgba(160,180,220,0.5)' },
   live:   { text: 'LIVE',   color: '#ff4444' },
   hybrid: { text: 'HYBRID', color: '#fa8c16' },
   stub:   { text: 'STUB',   color: 'rgba(160,180,220,0.5)' },
@@ -26,6 +26,8 @@ const ZONE_COLORS = {
 
 export default function App() {
   const [selectedEpisode, setSelectedEpisode] = useState(null);
+  const [episodes, setEpisodes] = useState([]);
+  const [episodesLoading, setEpisodesLoading] = useState(true);
   const [speed,      setSpeed]      = useState(1);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [showExfil,  setShowExfil]  = useState(false);
@@ -38,16 +40,128 @@ export default function App() {
   const { status: agentStatus } = useAgentStatus(2000);
 
   // ── Episode replay hook ─────────────────────────────────────────
-  const isEpisode = selectedEpisode && selectedEpisode !== 'live';
+  const hasSource = selectedEpisode !== null;
+  const isEpisode = hasSource && selectedEpisode !== 'live';
   const replay = useEpisodeReplay(isEpisode ? selectedEpisode : null, speed);
+  const selectedEpisodeMeta = episodes.find(ep => ep.name === selectedEpisode) ?? null;
 
   // ── Derive active data ──────────────────────────────────────────
-  const steps   = isEpisode ? replay.steps   : live.steps;
-  const latest  = isEpisode ? replay.latest  : live.latest;
-  const graph   = isEpisode ? replay.graph   : liveGraph;
+  const steps   = !hasSource ? [] : (isEpisode ? replay.steps   : live.steps);
+  const latest  = !hasSource ? null : (isEpisode ? replay.latest  : live.latest);
+  const graph   = isEpisode ? replay.graph : liveGraph;
+  const visibleThoughts = hasSource ? thoughts : [];
+  const visibleRedThoughts = hasSource ? redThoughts : [];
+  const visibleBlueThoughts = hasSource ? blueThoughts : [];
 
   const prevExfilRef = useRef(0);
   const prevZoneRef  = useRef(null);
+
+  useEffect(() => {
+    const fetchEpisodes = () => {
+      fetch('/api/episodes')
+        .then(r => r.json())
+        .then(data => {
+          const normalized = Array.isArray(data)
+            ? data.map(item => (
+              typeof item === 'string'
+                ? { name: item, winner: 'UNKNOWN', terminal_reason: 'unknown' }
+                : {
+                    name: item?.name ?? '',
+                    winner: item?.winner ?? 'UNKNOWN',
+                    terminal_reason: item?.terminal_reason ?? 'unknown',
+                  }
+            )).filter(item => item.name)
+            : [];
+          setEpisodes(normalized);
+          setEpisodesLoading(false);
+        })
+        .catch(() => setEpisodesLoading(false));
+    };
+
+    fetchEpisodes();
+    const intervalId = setInterval(fetchEpisodes, 3000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    if (selectedEpisode && selectedEpisode !== 'live' && !episodes.some(ep => ep.name === selectedEpisode)) {
+      setSelectedEpisode('live');
+    }
+  }, [episodes, selectedEpisode]);
+
+  const winnerConf = (() => {
+    if (!isEpisode) return null;
+    const winner = replay.outcome?.winner ?? selectedEpisodeMeta?.winner ?? 'UNKNOWN';
+    if (winner === 'RED') return { text: 'WINNER RED', color: '#ff6b6b', bg: 'rgba(255,68,68,0.14)' };
+    if (winner === 'BLUE') return { text: 'WINNER BLUE', color: '#7eb3ff', bg: 'rgba(68,136,255,0.14)' };
+    if (winner === 'DRAW') return { text: 'DRAW', color: '#d6e1f3', bg: 'rgba(190,205,235,0.12)' };
+    return { text: 'WINNER ?', color: 'rgba(180,195,220,0.9)', bg: 'rgba(160,180,220,0.10)' };
+  })();
+
+  const winnerCard = (() => {
+    const winnerFromTerminalReason = (reason) => {
+      if (!reason) return null;
+      const normalized = String(reason).toLowerCase().replace(/[\s-]+/g, '_');
+      if (['exfil_success', 'exfiltration_complete', 'exfil_complete'].includes(normalized)) return 'RED';
+      if (normalized === 'aborted') return 'DRAW';
+      if (
+        normalized.includes('detected')
+        || normalized.includes('timeout')
+        || normalized.includes('failure')
+        || normalized === 'max_steps'
+      ) return 'BLUE';
+      return null;
+    };
+
+    const terminalReason = isEpisode
+      ? (replay.outcome?.terminalReason ?? selectedEpisodeMeta?.terminal_reason ?? '')
+      : (
+          latest?.terminal_reason
+          ?? latest?.terminalReason
+          ?? latest?.outcome?.terminal_reason
+          ?? latest?.outcome?.terminalReason
+          ?? ''
+        );
+
+    const liveStatus = String(latest?.status ?? latest?.run_status ?? '').toLowerCase();
+    const hasLiveTerminalEvidence = Boolean(
+      terminalReason
+      || latest?.is_terminal
+      || latest?.terminal
+      || latest?.done
+      || ['terminated', 'complete', 'completed', 'finished', 'stopped'].includes(liveStatus)
+    );
+    const hasReplayTerminalEvidence = Boolean(replay.isComplete);
+    const isTerminated = isEpisode ? hasReplayTerminalEvidence : hasLiveTerminalEvidence;
+
+    if (!isTerminated) return { status: 'PENDING', winner: 'PENDING' };
+
+    const derivedWinner = winnerFromTerminalReason(terminalReason)
+      ?? (isEpisode ? (replay.outcome?.winner ?? selectedEpisodeMeta?.winner ?? null) : null);
+    const normalizedWinner = String(derivedWinner ?? '').toUpperCase();
+    if (normalizedWinner === 'RED') return { status: 'FINAL', winner: 'RED' };
+    if (normalizedWinner === 'BLUE') return { status: 'FINAL', winner: 'BLUE' };
+    if (normalizedWinner === 'DRAW') return { status: 'FINAL', winner: 'DRAW' };
+    return { status: 'PENDING', winner: 'PENDING' };
+  })();
+
+  const completionSignals = {
+    replayComplete: Boolean(isEpisode && replay.isComplete),
+    liveTerminalEvidence: Boolean(
+      !isEpisode && (
+        latest?.terminal_reason
+        || latest?.terminalReason
+        || latest?.outcome?.terminal_reason
+        || latest?.outcome?.terminalReason
+        || latest?.is_terminal
+        || latest?.terminal
+        || latest?.done
+        || ['terminated', 'complete', 'completed', 'finished', 'stopped'].includes(
+          String(latest?.status ?? latest?.run_status ?? '').toLowerCase()
+        )
+      )
+    ),
+  };
 
   // Zone breach banner
   useEffect(() => {
@@ -69,14 +183,9 @@ export default function App() {
   }, [latest?.exfil_count]);
 
   // Mode indicator
-  const modeRaw = isEpisode ? 'replay'
+  const modeRaw = !hasSource ? 'idle' : isEpisode ? 'replay'
     : (latest?.run_id?.split('_')[0] ?? (live.isDemoMode ? 'demo' : 'stub'));
   const modeConf = MODE_LABELS[modeRaw] ?? MODE_LABELS.demo;
-
-  // ── Show selector ────────────────────────────────────────────────
-  if (selectedEpisode === null) {
-    return <EpisodeSelector onSelect={setSelectedEpisode} />;
-  }
 
   // Progress percent for replay
   const progressPct = replay.totalSteps > 0
@@ -96,23 +205,55 @@ export default function App() {
       {/* ── Top bar ── */}
       <div className="top-bar">
 
-        {/* Back */}
-        <button
-          onClick={() => { setSelectedEpisode(null); prevZoneRef.current = null; prevExfilRef.current = 0; }}
-          style={{
-            padding: '4px 11px',
-            background: 'transparent',
-            border: '1px solid var(--border)',
-            borderRadius: 7,
-            fontFamily: 'var(--mono)', fontSize: 9.5, fontWeight: 700,
-            letterSpacing: '0.1em', color: 'var(--text-mute)',
-            cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--z0)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-mute)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
-        >
-          ← Episodes
-        </button>
+        {/* Episode selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <span style={{
+            fontFamily: 'var(--mono)', fontSize: 8.5, fontWeight: 700,
+            letterSpacing: '0.16em', color: 'var(--text-mute)', textTransform: 'uppercase',
+          }}>
+            Source ({episodes.length})
+          </span>
+          <select
+            value={selectedEpisode ?? ''}
+            onChange={e => {
+              setSelectedEpisode(e.target.value === '' ? null : e.target.value);
+              prevZoneRef.current = null;
+              prevExfilRef.current = 0;
+            }}
+            style={{
+              background: 'rgba(20, 28, 40, 0.9)',
+              border: '1px solid var(--border)',
+              borderRadius: 7,
+              color: 'var(--text)',
+              padding: '4px 9px',
+              fontFamily: 'var(--mono)',
+              fontSize: 9.5,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              minWidth: 128,
+              cursor: 'pointer',
+            }}
+            title="Choose live mode or an episode replay"
+          >
+            <option value="">— SELECT SOURCE —</option>
+            <option value="live">● LIVE FEED</option>
+            {episodes.length === 0 && !episodesLoading && (
+              <option value="" disabled>
+                no episode traces found
+              </option>
+            )}
+            {episodes.map((ep, idx) => (
+              <option key={ep.name} value={ep.name}>
+                {`EP ${String(idx + 1).padStart(2, '0')} · ${ep.winner} · ${ep.name.replace('.json', '')}`}
+              </option>
+            ))}
+          </select>
+          {episodesLoading && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 8, color: 'var(--text-mute)', letterSpacing: '0.08em' }}>
+              loading…
+            </span>
+          )}
+        </div>
 
         {/* Brand */}
         <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14, letterSpacing: '0.20em', whiteSpace: 'nowrap' }}>
@@ -155,6 +296,22 @@ export default function App() {
           </div>
         )}
 
+        {winnerConf && (
+          <div style={{
+            fontFamily: 'var(--mono)',
+            fontSize: 8.5,
+            fontWeight: 700,
+            letterSpacing: '0.12em',
+            color: winnerConf.color,
+            background: winnerConf.bg,
+            border: `1px solid ${winnerConf.color}45`,
+            borderRadius: 5,
+            padding: '2px 8px',
+          }}>
+            {winnerConf.text}
+          </div>
+        )}
+
         <div style={{ flex: 1 }} />
 
         {/* Zone */}
@@ -182,17 +339,11 @@ export default function App() {
           </div>
         )}
 
-        {/* Demo tip */}
-        {!isEpisode && live.isDemoMode && (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 8.5, color: 'rgba(255,215,64,0.45)', letterSpacing: '0.1em' }}>
-            ◉ DEMO — run python main.py --live
-          </div>
-        )}
       </div>
 
       {/* ── Side drawer ── */}
       <DrawerPanel
-        thoughts={thoughts}
+        thoughts={visibleThoughts}
         steps={steps}
         isOpen={drawerOpen}
         onToggle={() => setDrawerOpen(o => !o)}
@@ -203,15 +354,19 @@ export default function App() {
         <GameMap
           graph={graph}
           steps={steps}
-          agentStatus={isEpisode ? null : agentStatus}
-          redThoughts={redThoughts}
-          blueThoughts={blueThoughts}
+          agentStatus={!hasSource || isEpisode ? null : agentStatus}
+          redThoughts={visibleRedThoughts}
+          blueThoughts={visibleBlueThoughts}
           speed={speed}
         />
       </div>
 
       {/* ── Stats HUD ── */}
-      <StatsHUD latest={latest} redThoughts={redThoughts} blueThoughts={blueThoughts} />
+      <StatsHUD
+        latest={latest}
+        winnerCard={winnerCard}
+        completionSignals={completionSignals}
+      />
 
       {/* ── Bottom bar ── */}
       <div className="bottom-bar">
@@ -249,7 +404,7 @@ export default function App() {
         <div style={{ flex: 1 }} />
 
         <div style={{ fontFamily: 'var(--mono)', fontSize: 8.5, color: 'var(--text-mute)', letterSpacing: '0.06em', flexShrink: 0 }}>
-          {steps.length} steps · {thoughts.length} thoughts
+          {steps.length} steps · {visibleThoughts.length} thoughts
         </div>
       </div>
 

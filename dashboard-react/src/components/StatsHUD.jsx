@@ -35,7 +35,7 @@ function GaugeBar({ value, label, color }) {
   );
 }
 
-export default function StatsHUD({ latest, redThoughts, blueThoughts }) {
+export default function StatsHUD({ latest, winnerCard, completionSignals }) {
   const suspicion = latest?.suspicion ?? 0;
   const detection = latest?.detection ?? 0;
   const zone      = latest?.zone      ?? 'Perimeter';
@@ -44,8 +44,25 @@ export default function StatsHUD({ latest, redThoughts, blueThoughts }) {
   const exfil     = latest?.exfil_count ?? 0;
   const zoneColor = ZONE_COLORS[zone] ?? '#0091a8';
 
-  const redCount  = redThoughts.length;
-  const blueCount = blueThoughts.length;
+  const hasCompletionEvidence = Boolean(
+    completionSignals?.replayComplete || completionSignals?.liveTerminalEvidence
+  );
+  const showWinnerCard = winnerCard?.status === 'FINAL' && hasCompletionEvidence;
+  const winnerState = winnerCard?.winner ?? 'PENDING';
+  const winnerText = winnerState === 'RED'
+    ? 'WINNER RED'
+    : winnerState === 'BLUE'
+      ? 'WINNER BLUE'
+      : winnerState === 'DRAW'
+        ? 'DRAW'
+        : '';
+  const winnerStyle = winnerState === 'RED'
+    ? { color: '#ff6b6b', bg: 'rgba(255,68,68,0.14)', border: 'rgba(255,68,68,0.35)' }
+    : winnerState === 'BLUE'
+      ? { color: '#7eb3ff', bg: 'rgba(68,136,255,0.14)', border: 'rgba(68,136,255,0.35)' }
+      : winnerState === 'DRAW'
+        ? { color: '#d6e1f3', bg: 'rgba(190,205,235,0.12)', border: 'rgba(190,205,235,0.30)' }
+        : { color: 'var(--text-mute)', bg: 'rgba(140,160,210,0.08)', border: 'rgba(140,160,210,0.20)' };
 
   return (
     <div className="stats-hud">
@@ -105,26 +122,33 @@ export default function StatsHUD({ latest, redThoughts, blueThoughts }) {
         )}
       </div>
 
-      {/* Thought counts */}
-      <div className="hud-card" style={{ display: 'flex', gap: 12 }}>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: '#ff4444' }}>
-            {redCount}
-          </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.1em', color: 'var(--text-mute)', textTransform: 'uppercase' }}>
-            RED thoughts
+      {/* Winner card (only after episode completes) */}
+      {showWinnerCard && (
+        <div
+          className="hud-card"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: winnerStyle.bg,
+            border: `1px solid ${winnerStyle.border}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: winnerStyle.color,
+              textAlign: 'center',
+            }}
+          >
+            {winnerText}
           </div>
         </div>
-        <div style={{ width: 1, background: 'rgba(140,160,210,0.10)' }} />
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: '#4488ff' }}>
-            {blueCount}
-          </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.1em', color: 'var(--text-mute)', textTransform: 'uppercase' }}>
-            BLUE thoughts
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

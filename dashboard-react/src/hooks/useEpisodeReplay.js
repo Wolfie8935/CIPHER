@@ -4,6 +4,7 @@ export function useEpisodeReplay(filename, speed = 1) {
   const [allSteps,   setAllSteps]   = useState([]);
   const [steps,      setSteps]      = useState([]);
   const [graph,      setGraph]      = useState({ nodes: [], edges: [] });
+  const [outcome,    setOutcome]    = useState(null);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
   const [isPlaying,  setIsPlaying]  = useState(false);
@@ -19,6 +20,7 @@ export function useEpisodeReplay(filename, speed = 1) {
     setCurrentIdx(0);
     setIsComplete(false);
     setIsPlaying(false);
+    setOutcome(null);
     idxRef.current = 0;
     stepsRef.current = [];
     setGraph({ nodes: [], edges: [] });
@@ -68,6 +70,11 @@ export function useEpisodeReplay(filename, speed = 1) {
         const finalDetection = data.blue_detection_confidence ?? 0;
         const exfilFiles    = data.red_exfiltrated_files ?? [];
         const terminalReason = data.terminal_reason ?? '';
+        const term = String(terminalReason || '').toLowerCase();
+        let winner = 'BLUE';
+        if (['exfil_success', 'exfiltration_complete', 'exfil_complete'].includes(term)) winner = 'RED';
+        else if (term === 'aborted') winner = 'DRAW';
+        setOutcome({ winner, terminalReason: terminalReason || 'max_steps' });
 
         // Group entries by step number (each step has 8 agent entries)
         const stepGroups = {};
@@ -168,6 +175,7 @@ export function useEpisodeReplay(filename, speed = 1) {
   const latest = steps[steps.length - 1] ?? null;
   return {
     steps, latest, graph,
+    outcome,
     isComplete, isPlaying,
     totalSteps: allSteps.length, currentIdx,
     play, pause, seekTo,

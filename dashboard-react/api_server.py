@@ -146,10 +146,41 @@ def network_graph():
     return jsonify({"nodes": [], "edges": []})
 
 
+def _discover_episode_traces() -> list[Path]:
+    """Use only project-root episode_traces/*.json files."""
+    traces_dir = ROOT / "episode_traces"
+    if not traces_dir.exists():
+        return []
+    traces = [p for p in traces_dir.glob("*.json") if p.is_file()]
+    traces.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return traces
+
+
 @app.route("/api/episodes")
 def list_episodes():
-    traces = sorted(glob.glob(str(ROOT / "episode_traces" / "*.json")), reverse=True)
-    return jsonify([Path(t).name for t in traces])
+    traces = _discover_episode_traces()
+    episodes = []
+    for p in traces:
+        winner = "UNKNOWN"
+        terminal_reason = ""
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            terminal_reason = str(data.get("terminal_reason", "") or "")
+            term = terminal_reason.lower()
+            if term in ("exfil_success", "exfiltration_complete", "exfil_complete"):
+                winner = "RED"
+            elif term == "aborted":
+                winner = "DRAW"
+            elif term:
+                winner = "BLUE"
+        except Exception:
+            pass
+        episodes.append({
+            "name": p.name,
+            "winner": winner,
+            "terminal_reason": terminal_reason or "unknown",
+        })
+    return jsonify(episodes)
 
 
 _CANONICAL_GRAPH_CACHE = None
@@ -198,8 +229,13 @@ def _get_canonical_graph():
 
 @app.route("/api/episode/<filename>")
 def get_episode(filename):
-    path = ROOT / "episode_traces" / filename
-    if path.exists():
+    candidates = [p for p in _discover_episode_traces() if p.name == filename]
+    if not candidates:
+        candidates = [ROOT / "episode_traces" / filename]
+
+    for path in candidates:
+        if not path.exists():
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             # Inject canonical graph when episode file has no graph data
@@ -207,7 +243,8 @@ def get_episode(filename):
                 data['graph'] = _get_canonical_graph()
             return jsonify(data)
         except Exception:
-            pass
+            continue
+
     return jsonify({}), 404
 
 
