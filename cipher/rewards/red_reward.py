@@ -36,6 +36,8 @@ class RedRewardComponents:
     terminal_reason: str
     # A3 bonus (kept optional for backward-compatible construction)
     zone_progress_bonus: float = 0.0
+    # Emergent action creativity bonus (capped at 0.3 per episode)
+    emergent_action_bonus: float = 0.0
     stub_fields: list[str] = field(default_factory=list)
 
     @property
@@ -157,13 +159,30 @@ def compute_red_reward(
                 visited_zones.add(z)
         zone_progress_bonus = round(0.05 * len(visited_zones), 4)
 
+        # Emergent action bonus — sum reward_modifiers from RED emergent log entries,
+        # capped at 0.3 per episode to prevent exploitation.
+        emergent_action_bonus = 0.0
+        for entry in getattr(state, "episode_log", []):
+            if (entry.get("action_type") == "emergent"
+                    and str(entry.get("agent_id", "")).startswith("red_")):
+                emergent_action_bonus += float(
+                    entry.get("result", {}).get("reward_modifier", 0.0)
+                )
+        emergent_action_bonus = round(min(0.3, emergent_action_bonus), 4)
+
         multiplicative_core = (
             exfiltration_completeness
             * (1.0 - detection_probability)
             * memory_efficiency_score
             * operation_complexity_multiplier
         )
-        total = multiplicative_core + abort_penalty + honeypot_trigger_penalty + zone_progress_bonus
+        total = (
+            multiplicative_core
+            + abort_penalty
+            + honeypot_trigger_penalty
+            + zone_progress_bonus
+            + emergent_action_bonus
+        )
 
         logger.debug("RED reward component exfiltration_completeness=%.4f", exfiltration_completeness)
         logger.debug("RED reward component detection_probability=%.4f", detection_probability)
@@ -180,6 +199,8 @@ def compute_red_reward(
         logger.debug("RED reward component zone_progress_bonus=%.4f", zone_progress_bonus)
         logger.info("RED reward total=%.4f", total)
 
+        logger.debug("RED reward component emergent_action_bonus=%.4f", emergent_action_bonus)
+
         return RedRewardComponents(
             exfiltration_completeness=round(exfiltration_completeness, 4),
             detection_probability=round(detection_probability, 4),
@@ -188,6 +209,7 @@ def compute_red_reward(
             abort_penalty=round(abort_penalty, 4),
             honeypot_trigger_penalty=round(honeypot_trigger_penalty, 4),
             zone_progress_bonus=zone_progress_bonus,
+            emergent_action_bonus=emergent_action_bonus,
             total=round(total, 4),
             episode_steps=int(getattr(state, "step", 0)),
             unique_nodes_visited=unique_nodes_visited,
@@ -207,6 +229,7 @@ def compute_red_reward(
             abort_penalty=0.0,
             honeypot_trigger_penalty=0.0,
             zone_progress_bonus=0.0,
+            emergent_action_bonus=0.0,
             total=0.0,
             episode_steps=int(getattr(state, "step", 0)),
             unique_nodes_visited=0,

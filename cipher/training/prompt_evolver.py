@@ -36,16 +36,18 @@ class PromptEvolver:
     EVOLUTION_LOG: Path = Path("prompt_evolution_log.jsonl")
     EVOLVE_EVERY_N: int = 5
 
-    # Prompt files updated for each team
+    # Prompt files updated for each team (5b: added red_analyst and blue_deception_architect)
     _RED_PROMPTS: tuple[str, ...] = (
         "red_planner.txt",
         "red_operative.txt",
         "red_exfiltrator.txt",
+        "red_analyst.txt",
     )
     _BLUE_PROMPTS: tuple[str, ...] = (
         "blue_surveillance.txt",
         "blue_threat_hunter.txt",
         "blue_forensics.txt",
+        "blue_deception_architect.txt",
     )
 
     _SECTION_HEADER: str = "\n\n## LEARNED HEURISTICS (Auto-evolved)\n"
@@ -62,6 +64,8 @@ class PromptEvolver:
         "false positive penalty",
         "honeypot trigger",
         "response speed",
+        "emergent actions",  # 5a: tracks emergent action effectiveness slot
+        "strategy is failing",  # 5c: stagnation detector slot
     )
 
     # ------------------------------------------------------------------ #
@@ -255,6 +259,40 @@ class PromptEvolver:
                     f"memory_efficiency_score."
                 )
 
+        # 5a — Emergent action effectiveness
+        if "red_emergent_bonus" in df.columns:
+            emergent_eps = df[df["red_emergent_bonus"] > 0]
+            non_emergent = df[df["red_emergent_bonus"] == 0]
+            if len(emergent_eps) >= 2 and len(non_emergent) >= 2:
+                em_mean = emergent_eps["red_total"].mean()
+                no_em_mean = non_emergent["red_total"].mean()
+                if em_mean > no_em_mean:
+                    rules.append(
+                        f"LEARNED: Episodes using emergent actions scored "
+                        f"{em_mean:.2f} avg vs {no_em_mean:.2f} without. "
+                        "Use emergent actions when stuck or under pressure — "
+                        "they significantly improve outcomes."
+                    )
+                elif em_mean < no_em_mean - 0.2:
+                    rules.append(
+                        "LEARNED: Emergent actions have underperformed standard "
+                        "actions recently. Use them only when truly stuck, not "
+                        "as a first resort."
+                    )
+
+        # 5c — Stagnation detector: same terminal reason 3+ times in a row
+        if "terminal_reason" in df.columns and len(df) >= 3:
+            last_3_reasons = df["terminal_reason"].tail(3).tolist()
+            if len(set(last_3_reasons)) == 1:
+                repeated_reason = last_3_reasons[0]
+                rules.append(
+                    f"LEARNED: Your last 3 episodes ended the same way: "
+                    f"'{repeated_reason}'. Your current strategy is failing — "
+                    "you MUST try a different approach. Consider emergent "
+                    "actions, different zone crossing sequences, or alternative "
+                    "paths you have not tried."
+                )
+
         return rules
 
     def _extract_blue_heuristics(self, df: pd.DataFrame) -> list[str]:
@@ -297,6 +335,34 @@ class PromptEvolver:
                     f"LEARNED: Response speed bonus averages {speed_mean:.3f}. "
                     f"Issue ANALYZE_ANOMALY within the first 3 steps to "
                     f"capture early detection bonuses."
+                )
+
+        # 5a — Emergent action effectiveness for BLUE
+        if "blue_emergent_bonus" in df.columns:
+            emergent_eps = df[df["blue_emergent_bonus"] > 0]
+            non_emergent = df[df["blue_emergent_bonus"] == 0]
+            if len(emergent_eps) >= 2 and len(non_emergent) >= 2:
+                em_mean = emergent_eps["blue_total"].mean()
+                no_em_mean = non_emergent["blue_total"].mean()
+                if em_mean > no_em_mean:
+                    rules.append(
+                        f"LEARNED: Episodes using emergent actions scored "
+                        f"{em_mean:.2f} avg vs {no_em_mean:.2f} without. "
+                        "Use emergent detection/investigation actions when "
+                        "standard methods are failing to find RED."
+                    )
+
+        # 5c — Stagnation detector for BLUE
+        if "terminal_reason" in df.columns and len(df) >= 3:
+            last_3_reasons = df["terminal_reason"].tail(3).tolist()
+            # BLUE stagnates when RED keeps winning (exfiltration_complete)
+            if all(r == "exfiltration_complete" for r in last_3_reasons):
+                rules.append(
+                    "LEARNED: RED has completed exfiltration in the last 3 "
+                    "episodes. Your current detection strategy is failing — "
+                    "try placing honeypots at different zone boundaries, "
+                    "using emergent surveillance techniques, or coordinating "
+                    "INVESTIGATE_NODE on high-value path nodes earlier."
                 )
 
         return rules

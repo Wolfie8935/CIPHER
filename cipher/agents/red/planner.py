@@ -15,6 +15,7 @@ import random
 from pathlib import Path
 
 from cipher.agents.base_agent import Action, ActionType, BaseAgent
+from cipher.agents.red.coordination import get_danger_nodes, mark_danger
 from cipher.environment.observation import RedObservation
 from cipher.utils.config import CipherConfig
 from cipher.utils.logger import get_logger
@@ -55,6 +56,25 @@ class RedPlanner(BaseAgent):
 
     def observe(self, observation: RedObservation) -> None:
         self._current_observation = observation
+        # Track zone stall here (not just in _stub_act) so live/hybrid mode sees it too.
+        if observation.current_zone == self._last_zone:
+            self._zone_stall_steps += 1
+        else:
+            self._zone_stall_steps = 0
+            self._last_zone = observation.current_zone
+
+        # Track suspicion spikes and publish to shared danger map so all RED
+        # agents benefit (not just planner's private _nodes_with_suspicion_spikes).
+        self._suspicion_history.append(observation.estimated_suspicion)
+        self._blue_conf_history.append(float(getattr(observation, 'blue_detection_confidence', 0.0)))
+        if len(self._suspicion_history) > 5:
+            self._suspicion_history.pop(0)
+            self._blue_conf_history.pop(0)
+        if len(self._suspicion_history) >= 2:
+            spike = self._suspicion_history[-1] - self._suspicion_history[-2]
+            if spike > 0.15 and observation.estimated_suspicion > 0.55:
+                self._nodes_with_suspicion_spikes.add(observation.current_node)
+                mark_danger(observation.current_node, spike)
 
     def _stub_act(self) -> Action:
         obs = self._current_observation
@@ -64,26 +84,11 @@ class RedPlanner(BaseAgent):
         if obs.context_reset_this_step:
             self._abort_gate_streak = 0
 
-        # ── Change 3 & 4: Track suspicion/confidence history ─────────
+        # Suspicion/confidence history and zone stall are now tracked in observe()
+        # so live/hybrid mode benefits too.
         blue_confidence = float(getattr(obs, 'blue_detection_confidence', 0.0))
-        self._suspicion_history.append(obs.estimated_suspicion)
-        self._blue_conf_history.append(blue_confidence)
-        if len(self._suspicion_history) > 5:
-            self._suspicion_history.pop(0)
-            self._blue_conf_history.pop(0)
 
-        # Change 4: record nodes that caused suspicion spikes
-        if len(self._suspicion_history) >= 2:
-            if (self._suspicion_history[-1] - self._suspicion_history[-2] > 0.10
-                    and obs.estimated_suspicion > 0.55):
-                self._nodes_with_suspicion_spikes.add(obs.current_node)
-
-        # Anti-loop: track zone stall
-        if obs.current_zone == self._last_zone:
-            self._zone_stall_steps += 1
-        else:
-            self._zone_stall_steps = 0
-            self._last_zone = obs.current_zone
+        # zone_stall is now tracked in observe() so live mode benefits too.
         zone_stalled = self._zone_stall_steps >= 4
 
         # PRIORITY 0: If in Zone 3 but not at HVT, hunt for HVT node in adjacent
@@ -204,8 +209,9 @@ class RedPlanner(BaseAgent):
             # Use long lookback to break 6-node cycles (25→28→29→25…)
             pool_deduped = self._avoid_recent_long(pool)
 
-            # Change 4: trap-aware path scoring with stronger zone-advancement bias
-            spike_nodes = self._nodes_with_suspicion_spikes
+            # Trap-aware path scoring with stronger zone-advancement bias.
+            # Use shared danger map so all RED agents' observations contribute.
+            spike_nodes = get_danger_nodes(threshold=0.3) | self._nodes_with_suspicion_spikes
 
             def _path_score(p: dict) -> tuple:
                 node_id = int(p.get("node", 0))
@@ -235,7 +241,7 @@ class RedPlanner(BaseAgent):
         # PRIORITY 5: Fallback movement heuristics when path metadata is unavailable.
         adj_zones = getattr(obs, 'adjacent_node_zones', [])
         adj_types = obs.adjacent_node_types or []
-        forbidden = honeypot_nodes | breadcrumb_nodes | self._nodes_with_suspicion_spikes
+        forbidden = honeypot_nodes | breadcrumb_nodes | self._nodes_with_suspicion_spikes | get_danger_nodes()
         if obs.adjacent_nodes:
             hvt_neighbors = [
                 obs.adjacent_nodes[i]

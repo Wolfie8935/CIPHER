@@ -69,6 +69,7 @@ class EpisodeState:
     blue_investigated_nodes: list[int] = field(default_factory=list)
     blue_alerts_issued: list[dict[str, Any]] = field(default_factory=list)
     blue_false_positives: int = 0
+    blue_total_alerts: int = 0
     blue_anomaly_history: list[dict[str, Any]] = field(default_factory=list)
     blue_suspected_zone: int | None = None
 
@@ -328,6 +329,7 @@ class EpisodeState:
             "correct": is_correct,
         }
         self.blue_alerts_issued.append(alert_record)
+        self.blue_total_alerts += 1
 
         if not is_correct:
             self.blue_false_positives += 1
@@ -445,6 +447,7 @@ class EpisodeState:
             "blue_investigated_nodes": self.blue_investigated_nodes,
             "blue_alerts_issued": self.blue_alerts_issued,
             "blue_false_positives": self.blue_false_positives,
+            "blue_total_alerts": self.blue_total_alerts,
             "blue_anomaly_history": self.blue_anomaly_history,
             "blue_suspected_zone": self.blue_suspected_zone,
             # Shared
@@ -512,6 +515,7 @@ class EpisodeState:
             blue_investigated_nodes=data.get("blue_investigated_nodes", []),
             blue_alerts_issued=data.get("blue_alerts_issued", []),
             blue_false_positives=data.get("blue_false_positives", 0),
+            blue_total_alerts=data.get("blue_total_alerts", 0),
             blue_anomaly_history=data.get("blue_anomaly_history", []),
             blue_suspected_zone=data.get("blue_suspected_zone"),
             # Shared

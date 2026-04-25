@@ -122,7 +122,7 @@ class CipherConfig(BaseSettings):
         0.15, description="Fraction of assets that are honeypots"
     )
     env_anomaly_feed_noise: float = Field(
-        0.2, description="BLUE false positive rate in raw feed"
+        0.10, description="BLUE false positive rate in raw feed (reduced from 0.2 to give BLUE usable signal)"
     )
     env_dead_drop_max_tokens: int = Field(
         512, description="Max size of each dead drop file"

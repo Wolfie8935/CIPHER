@@ -46,23 +46,40 @@ class BlueForensics(BaseAgent):
         # High-zone entries are more significant
         high_zone_entries = [e for e in self._operation_graph if e.get("zone", 0) >= 2]
 
-        # Escalate to TRIGGER_ALERT when graph is rich enough and confidence is elevated
-        if len(self._operation_graph) >= 5 and obs.current_detection_confidence >= 0.45 and high_zone_entries:
-            # Pick the most recent high-zone node as the alert target
-            latest_high = max(high_zone_entries, key=lambda e: (e["zone"], e["step"]))
+        # Escalate to TRIGGER_ALERT only with strong evidence:
+        # need a rich graph, high confidence, AND recent high-zone evidence (within last 3 steps)
+        recent_high = [e for e in high_zone_entries if obs.step - e.get("step", 0) <= 3]
+        if (
+            len(self._operation_graph) >= 8
+            and obs.current_detection_confidence >= 0.65
+            and recent_high
+        ):
+            latest_high = max(recent_high, key=lambda e: (e["zone"], e["step"]))
             return Action(agent_id=self.agent_id, action_type=ActionType.TRIGGER_ALERT,
                          target_node=latest_high["node_id"],
                          reasoning=(
-                             f"Forensic graph has {len(self._operation_graph)} entries — "
-                             f"RED signature confirmed at zone {latest_high['zone']} node {latest_high['node_id']}. Alerting."
+                             f"Strong forensic evidence: {len(self._operation_graph)} graph entries, "
+                             f"recent zone-{latest_high['zone']} activity at node {latest_high['node_id']}. Alerting."
                          ))
 
-        # Investigate the latest high-zone node if any
+        # Investigate zone-3 nodes with recency weighting: most recent first,
+        # and avoid re-investigating the same node repeatedly
+        _investigated = getattr(self, "_investigated_nodes", set())
         if high_zone_entries:
-            latest = max(high_zone_entries, key=lambda e: e["step"])
+            # Prefer un-investigated, recent, high-zone entries
+            fresh_candidates = [
+                e for e in high_zone_entries
+                if e.get("node_id") not in _investigated
+                and obs.step - e.get("step", 0) <= 5
+            ]
+            if not fresh_candidates:
+                fresh_candidates = high_zone_entries
+            latest = max(fresh_candidates, key=lambda e: (e["zone"], e["step"]))
+            _investigated.add(latest["node_id"])
+            self._investigated_nodes = _investigated
             return Action(agent_id=self.agent_id, action_type=ActionType.INVESTIGATE_NODE,
                          target_node=latest["node_id"],
-                         reasoning=f"Investigating zone {latest['zone']} node {latest['node_id']} from op graph.")
+                         reasoning=f"Investigating zone-{latest['zone']} node {latest['node_id']} (step {latest['step']}).")
 
         # Reconstruct path at most once every 4 steps (avoid infinite loop)
         last_reconstruct = getattr(self, "_last_reconstruct_step", -99)
@@ -84,6 +101,8 @@ class BlueForensics(BaseAgent):
     def reset(self) -> None:
         super().reset()
         self._operation_graph = []
+        self._investigated_nodes = set()
+        self._last_reconstruct_step = -99
 
     def _build_messages(self) -> list[dict[str, str]]:
         messages = super()._build_messages()

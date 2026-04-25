@@ -22,8 +22,9 @@ class BlueRewardComponents:
     false_positive_rate_penalty: float = 0.0
     honeypot_trigger_rate: float = 0.0
     operation_graph_reconstruction_score: float = 0.0
-    # A3: bonus for honeypots that actually caught RED
     trap_accuracy_bonus: float = 0.0
+    emergent_action_bonus: float = 0.0
+    investigation_effectiveness: float = 0.0
     total: float = 0.0
 
 
@@ -90,12 +91,15 @@ def compute_blue_reward(
         else:
             response_speed_bonus = float(math.exp(-float(first_detection_step) / 50.0))
 
-        anomalies = list(getattr(state, "blue_anomaly_history", []) or [])
-        if not anomalies:
+        # Use actual false positive alert count — penalizes BLUE for issuing
+        # incorrect TRIGGER_ALERT, not just anomaly feed composition.
+        fp_count = int(getattr(state, "blue_false_positives", 0))
+        total_alerts = int(getattr(state, "blue_total_alerts", 0))
+        if total_alerts == 0:
             false_positive_rate_penalty = 0.0
         else:
-            red_planted = sum(1 for a in anomalies if bool(a.get("is_red_planted", False)))
-            false_positive_rate_penalty = red_planted / max(1, len(anomalies))
+            # Scales 0→1: 0 FPs = no penalty, all FPs = full penalty
+            false_positive_rate_penalty = min(1.0, fp_count / max(1, total_alerts))
 
         trap_summary = _safe_trap_summary(state)
         honeypots_triggered = int(trap_summary.get("honeypots_triggered", 0))
@@ -133,12 +137,44 @@ def compute_blue_reward(
             union = len(reconstructed_path | actual_path)
             operation_graph_reconstruction_score = intersection / max(1, union)
 
+        # Emergent action bonus — sum reward_modifiers from BLUE emergent log entries,
+        # capped at 0.3 per episode to prevent exploitation.
+        emergent_action_bonus = 0.0
+        for entry in getattr(state, "episode_log", []):
+            if (entry.get("action_type") == "emergent"
+                    and str(entry.get("agent_id", "")).startswith("blue_")):
+                emergent_action_bonus += float(
+                    entry.get("result", {}).get("reward_modifier", 0.0)
+                )
+        emergent_action_bonus = round(min(0.3, emergent_action_bonus), 4)
+
+        # Investigation effectiveness: rewards productive investigation work.
+        # Count adjacent/same-zone/hit investigations vs total investigations.
+        _inv_entries = [
+            e for e in getattr(state, "episode_log", [])
+            if str(e.get("agent_id", "")).startswith("blue_")
+            and e.get("action_type") in ("investigate_node", "INVESTIGATE_NODE")
+        ]
+        _productive = sum(
+            1 for e in _inv_entries
+            if e.get("result", {}).get("reason", "").startswith(
+                ("investigate_hit", "investigate_adjacent", "investigate_same_zone")
+            )
+        )
+        investigation_effectiveness = 0.0
+        if _inv_entries:
+            investigation_effectiveness = round(
+                min(0.4, (_productive / max(1, len(_inv_entries))) * 0.5), 4
+            )
+
         total = (
             detection_accuracy_score
             * response_speed_bonus
-            * (1.0 + 1.5 * honeypot_trigger_rate)   # A3: weight increased ×1.5
+            * (1.0 + 1.5 * honeypot_trigger_rate)
             + operation_graph_reconstruction_score
-            + trap_accuracy_bonus                      # A3: per-catch bonus
+            + trap_accuracy_bonus
+            + emergent_action_bonus
+            + investigation_effectiveness
         ) - false_positive_rate_penalty
 
         logger.debug("BLUE reward component detection_accuracy_score=%.4f", detection_accuracy_score)
@@ -149,6 +185,7 @@ def compute_blue_reward(
         )
         logger.debug("BLUE reward component honeypot_trigger_rate=%.4f", honeypot_trigger_rate)
         logger.debug("BLUE reward component trap_accuracy_bonus=%.4f", trap_accuracy_bonus)
+        logger.debug("BLUE reward component emergent_action_bonus=%.4f", emergent_action_bonus)
         logger.debug(
             "BLUE reward component operation_graph_reconstruction_score=%.4f",
             operation_graph_reconstruction_score,
@@ -162,6 +199,8 @@ def compute_blue_reward(
             honeypot_trigger_rate=round(honeypot_trigger_rate, 4),
             operation_graph_reconstruction_score=round(operation_graph_reconstruction_score, 4),
             trap_accuracy_bonus=round(trap_accuracy_bonus, 4),
+            emergent_action_bonus=emergent_action_bonus,
+            investigation_effectiveness=investigation_effectiveness,
             total=round(total, 4),
         )
     except Exception as exc:

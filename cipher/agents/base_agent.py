@@ -74,6 +74,18 @@ class ActionType(str, Enum):
     DEPLOY_BREADCRUMB = "deploy_breadcrumb"
     DEPLOY_FALSE_ESCALATION = "deploy_false_escalation"
 
+    # ── EMERGENT (self-reliant novel actions) ─────────────────────
+    EMERGENT = "emergent"  # Agent-proposed action outside the predefined vocabulary
+
+
+class EmergentAction(BaseModel):
+    """An agent-proposed action outside the predefined ActionType vocabulary."""
+    intent: str = ""          # e.g. "spoof_credentials", "network_quarantine"
+    target_node: int | None = None
+    target_file: str | None = None
+    reasoning: str = ""       # Why the agent chose this novel action
+    expected_effect: str = "" # What the agent thinks will happen
+
 
 class Action(BaseModel):
     """
@@ -95,6 +107,9 @@ class Action(BaseModel):
     trap_type: str | None = None  # TrapType value string
     trap_params: dict[str, Any] | None = None
     trap_payload: dict[str, Any] | None = None
+
+    # Emergent action payload — populated when action_type == EMERGENT
+    emergent_data: EmergentAction | None = None
 
 
 # ── Prompt templates directory ────────────────────────────────
@@ -119,6 +134,8 @@ RED_ACTIONS = {
     # LoRA specialist recon actions
     ActionType.ESCALATE_PRIVILEGES,
     ActionType.SCAN,
+    # Emergent (self-reliant) actions
+    ActionType.EMERGENT,
 }
 
 BLUE_ACTIONS = {
@@ -135,6 +152,8 @@ BLUE_ACTIONS = {
     ActionType.DEPLOY_TRAP,  # Legacy alias
     ActionType.DEPLOY_BREADCRUMB,  # Legacy alias
     ActionType.DEPLOY_FALSE_ESCALATION,  # Legacy alias
+    # Emergent (self-reliant) actions
+    ActionType.EMERGENT,
 }
 
 # Max history entries to keep in prompt (controls token budget)
@@ -247,6 +266,37 @@ class BaseAgent(ABC):
         adapter_path = os.getenv(env_key, default_path)
         return bool(os.path.exists(adapter_path))
 
+    def _get_adaptive_temperature(self) -> float:
+        """Change 6a: Return temperature based on recent losing streak.
+
+        3+ consecutive losses → bump to 0.9 to encourage diverse outputs.
+        After a win → back to baseline 0.7.
+        """
+        try:
+            from cipher.training.episode_memory import count_consecutive_losses
+            losses = count_consecutive_losses(team=self.team)
+            if losses >= 3:
+                return 0.9  # exploration pressure
+        except ImportError:
+            pass
+        return 0.7
+
+    def _get_exploration_directive(self) -> str:
+        """Change 6b: Return an exploration directive when agent is in a losing streak."""
+        try:
+            from cipher.training.episode_memory import count_consecutive_losses
+            losses = count_consecutive_losses(team=self.team)
+            if losses >= 3:
+                return (
+                    f"\n\nIMPORTANT: Your recent strategy has failed {losses} times in a row. "
+                    "You MUST try a fundamentally different approach this episode. "
+                    "This includes trying emergent actions you haven't used before, "
+                    "taking different paths, or using different timing strategies."
+                )
+        except ImportError:
+            pass
+        return ""
+
     def _act_live(self) -> Action:
         """
         LLM-backed action selection via NVIDIA NIM API.
@@ -255,14 +305,22 @@ class BaseAgent(ABC):
         """
         from cipher.utils.llm_client import get_llm_client
 
+        # Change 6: adaptive temperature + exploration directive on losing streaks
+        temperature = self._get_adaptive_temperature()
+        exploration_directive = self._get_exploration_directive()
+
         messages = self._build_messages()
+        if exploration_directive:
+            # Append directive to the last user message
+            messages[-1]["content"] += exploration_directive
+
         client = get_llm_client()
 
         response_text = client.complete(
             model_env_key=self._model_env_key,
             messages=messages,
             max_tokens=512,
-            temperature=0.7,
+            temperature=temperature,
             expect_json=True,
             team=self.team,
         )
@@ -335,12 +393,18 @@ class BaseAgent(ABC):
         if was_in_hybrid:
             _LOCAL_KEYS_IN_HYBRID.discard(key)
 
+        # Change 6: adaptive temperature on losing streaks
+        temperature = self._get_adaptive_temperature()
+        exploration_directive = self._get_exploration_directive()
+        if exploration_directive:
+            messages[-1]["content"] += exploration_directive
+
         try:
             response_text = client.complete(
                 model_env_key=key,
                 messages=messages,
                 max_tokens=512,
-                temperature=0.7,
+                temperature=temperature,
                 expect_json=True,
                 team=self.team,
             )
@@ -414,12 +478,23 @@ class BaseAgent(ABC):
         Construct the full OpenAI-format message list for the LLM.
 
         Structure:
-        1. System prompt (role-specific, from prompts/*.txt)
+        1. System prompt (role-specific, from prompts/*.txt) with episode memory prefix
         2. Compressed conversation history (last 5 full + summary of older)
         3. Current observation as user message
         """
+        # Change 3: prepend recent episode history to system prompt so agents
+        # learn from past episodes and know what strategies succeeded or failed.
+        system_content = self._system_prompt
+        try:
+            from cipher.training.episode_memory import get_recent_summary
+            ep_summary = get_recent_summary(n=3)
+            if ep_summary:
+                system_content = ep_summary + "\n\n" + system_content
+        except ImportError:
+            pass
+
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": system_content},
         ]
 
         # Compress history: keep last 5 exchanges verbatim, summarise older
@@ -467,6 +542,8 @@ class BaseAgent(ABC):
             f"Current node: {obs.current_node} | Zone: {obs.current_zone} | Type: {node_type_val}",
             f"Hostname: {obs.current_hostname}",
             f"Suspicion level: {obs.estimated_suspicion:.2f} | Privilege: {obs.current_privilege_level}",
+            # Change 2: BLUE detection confidence — RED now sees how close BLUE is to catching them
+            f"BLUE detection confidence: {obs.blue_detection_confidence:.2f} (abort if this reaches 0.80+)",
             # Critical status line — LLM must see this immediately
             f"EXFILTRATE ALLOWED: {'YES — you are at the HIGH_VALUE_TARGET. Use EXFILTRATE now.' if at_hvt else 'NO — current node is not the HVT. Keep moving deeper.'}",
         ]
@@ -518,6 +595,43 @@ class BaseAgent(ABC):
         # Zone boundary
         if obs.zone_boundary_ahead:
             lines.append("→ ZONE BOUNDARY AHEAD — advancing here raises privileges and zone level")
+
+        # Zone stall warning — uses getattr for safety on non-planner RED agents
+        zone_stall = getattr(self, '_zone_stall_steps', 0)
+        if zone_stall >= 6:
+            lines.append(
+                f"⚠⚠ CRITICAL ZONE STALL: {zone_stall} steps in Zone {obs.current_zone}. "
+                f"You MUST advance to the next zone NOW. Staying here is mission failure."
+            )
+
+        # Change 2: danger map from shared RED coordination module
+        try:
+            from cipher.agents.red.coordination import get_danger_nodes
+            danger_map = get_danger_nodes(threshold=0.4)
+            if danger_map:
+                flagged = sorted(danger_map, key=danger_map.get, reverse=True)[:5]
+                scores = ", ".join(f"n{n}={danger_map[n]:.2f}" for n in flagged)
+                lines.append(f"DANGER MAP (suspicion spikes observed by RED team): {scores}")
+        except ImportError:
+            pass
+
+        # Change 2: available paths with suspicion costs — show as a decision table
+        if obs.available_paths:
+            lines.append("PATH OPTIONS (choose lowest suspicion_delta route):")
+            for p in obs.available_paths[:6]:
+                node_id = p.get("node", "?")
+                s_delta = p.get("suspicion_delta", 0.0)
+                zone = p.get("zone", "?")
+                host = p.get("hostname", "?")
+                lines.append(f"  → n{node_id} (zone={zone}, host={host}, suspicion_cost={s_delta:+.3f})")
+
+        # Change 4b: contextual emergent hints when RED is stuck
+        if obs.estimated_suspicion > 0.60 and zone_stall >= 3:
+            lines.append(
+                "STUCK DETECTED: High suspicion + zone stall. Standard actions are failing. "
+                "Consider an EMERGENT action like 'spoof_credentials' or 'inject_noise' "
+                "to change the situation immediately."
+            )
 
         # Files at current node
         if obs.files_at_current_node:
@@ -601,6 +715,38 @@ class BaseAgent(ABC):
         # Network anomaly rate
         lines.append(f"Network anomaly rate: {obs.network_anomaly_rate:.2f}")
 
+        # Coordinated sweep signal — when detection is high, direct all BLUE agents
+        # to focus on the zone with the highest cumulative anomaly severity.
+        if obs.current_detection_confidence > 0.60 and obs.anomaly_feed:
+            zone_scores: dict[int, float] = {}
+            for anomaly in obs.anomaly_feed:
+                z = anomaly.zone
+                zone_scores[z] = zone_scores.get(z, 0.0) + anomaly.severity
+            if zone_scores:
+                hot_zone = max(zone_scores, key=zone_scores.get)
+                lines.append(
+                    f"COORDINATED SWEEP ACTIVE: All BLUE agents focus on Zone {hot_zone}. "
+                    f"Prioritize INVESTIGATE_NODE on Zone {hot_zone} nodes immediately."
+                )
+
+        # Change 2: recent traversal patterns — surface RED movement history for BLUE
+        if obs.recent_traversal_patterns:
+            lines.append("RECENT RED TRAVERSAL PATTERNS (last observed movement signatures):")
+            for pattern in obs.recent_traversal_patterns[-4:]:
+                from_node = pattern.get("from_node", "?")
+                to_node = pattern.get("to_node", "?")
+                zone = pattern.get("zone", "?")
+                step_p = pattern.get("step", "?")
+                lines.append(f"  Step {step_p}: {from_node} → {to_node} (zone {zone})")
+
+        # Change 4b: contextual emergent hints when BLUE detection is stagnant
+        if obs.current_detection_confidence < 0.40 and obs.step > 10:
+            lines.append(
+                "LOW DETECTION: Standard investigation hasn't found RED after 10+ steps. "
+                "Consider EMERGENT actions like 'traffic_analysis' or 'shadow_agent' "
+                "to break the stalemate."
+            )
+
         return "\n".join(lines)
 
     def _parse_action_from_response(self, response_text: str) -> Action:
@@ -665,7 +811,23 @@ class BaseAgent(ABC):
         if action_type == ActionType.SCAN:
             action_type = ActionType.ESCALATE_PRIVILEGES if self.team == "red" else ActionType.ANALYZE_ANOMALY
 
-        # Validate team-action consistency
+        # Handle EMERGENT action — build EmergentAction payload from JSON fields
+        # before the team-validation gate (EMERGENT is valid for both teams).
+        emergent_payload: EmergentAction | None = None
+        if action_type == ActionType.EMERGENT:
+            intent = str(data.get("intent", data.get("action_intent", "unknown")))
+            emergent_payload = EmergentAction(
+                intent=intent,
+                target_node=int(data["target_node"]) if data.get("target_node") is not None else None,
+                target_file=str(data["target_file"]) if data.get("target_file") else None,
+                reasoning=str(data.get("reasoning", ""))[:500],
+                expected_effect=str(data.get("expected_effect", ""))[:300],
+            )
+            logger.info(
+                f"{self.agent_id}: EMERGENT action proposed — intent='{intent}'"
+            )
+
+        # Validate team-action consistency (EMERGENT passes for both teams)
         valid_set = RED_ACTIONS if self.team == "red" else BLUE_ACTIONS
         if action_type not in valid_set:
             logger.warning(
@@ -715,7 +877,9 @@ class BaseAgent(ABC):
             # Normalize EXFIL action shape: file-based target only.
             target_node = None
 
-        if not self._passes_semantic_guardrails(action_type):
+        # EMERGENT actions bypass standard semantic guardrails and trap budget —
+        # they are evaluated by EmergentEvaluator in the episode runner instead.
+        if action_type != ActionType.EMERGENT and not self._passes_semantic_guardrails(action_type):
             rejected_action = action_type.value
             logger.warning(
                 f"{self.agent_id}: Semantic guardrail rejected action "
@@ -752,6 +916,7 @@ class BaseAgent(ABC):
             reasoning=str(reasoning),
             trap_params=trap_params if isinstance(trap_params, dict) else {},
             trap_payload=trap_params if isinstance(trap_params, dict) else {},
+            emergent_data=emergent_payload,
         )
 
     def _passes_semantic_guardrails(self, action_type: ActionType) -> bool:
@@ -780,6 +945,14 @@ class BaseAgent(ABC):
                     blue_delta = conf_history[-1] - conf_history[-3]
                     if recent_delta > 0.20 and blue_delta > 0.18 and obs.estimated_suspicion > 0.78:
                         return True
+                # Stuck gate: allow abort when genuinely trapped (4+ consecutive waits
+                # with no progress). Prevents infinite guardrail-rejection loops.
+                recent_waits = sum(
+                    1 for a in self.action_history[-6:]
+                    if a.action_type in (ActionType.WAIT, ActionType.STAND_DOWN)
+                )
+                if recent_waits >= 4:
+                    return True
                 return False
             return False
 

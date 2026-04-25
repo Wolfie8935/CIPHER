@@ -26,6 +26,8 @@ from rich.table import Table
 from rich.text import Text
 
 from cipher.agents.base_agent import Action, ActionType
+from cipher.agents.red.coordination import clear_danger_map
+from cipher.training.episode_memory import record_episode as _record_episode_memory
 from cipher.agents.blue.deception_architect import BlueDeceptionArchitect
 from cipher.agents.blue.forensics import BlueForensics
 from cipher.agents.blue.surveillance import BlueSurveillance
@@ -42,6 +44,7 @@ from cipher.environment.graph import (
     get_high_value_target,
     get_honeypot_nodes,
 )
+from cipher.environment.emergent_evaluator import EmergentEvaluator
 from cipher.environment.observation import (
     generate_blue_observation,
     generate_red_observation,
@@ -196,6 +199,12 @@ def run_episode(
     state.trap_registry = trap_registry
     state.red_path_history = [scenario.red_start_node]
 
+    # ── Clear shared RED danger map for this episode ──────────────
+    clear_danger_map()
+
+    # ── Initialize emergent action evaluator ──────────────────────
+    emergent_eval = EmergentEvaluator()
+
     # ── Initialize agents ────────────────────────────────────────
     red_agents = [
         RedPlanner("red_planner_01", cfg),
@@ -334,19 +343,25 @@ def run_episode(
                 vault,
                 scenario,
                 exfil_success_this_step=exfil_success_this_step,
+                emergent_eval=emergent_eval,
+                graph=graph,
             )
             if result.get("reason", "").startswith("exfil_"):
                 exfil_success_this_step = result.get("success", False) or exfil_success_this_step
 
+            _red_payload: dict[str, Any] = {
+                "target_node": action.target_node,
+                "target_file": action.target_file,
+                "reasoning": action.reasoning,
+                "trap_params": action.trap_params or {},
+            }
+            if action.action_type == ActionType.EMERGENT and action.emergent_data:
+                _red_payload["emergent_intent"] = action.emergent_data.intent
+                _red_payload["emergent_expected_effect"] = action.emergent_data.expected_effect
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
-                action_payload={
-                    "target_node": action.target_node,
-                    "target_file": action.target_file,
-                    "reasoning": action.reasoning,
-                    "trap_params": action.trap_params or {},
-                },
+                action_payload=_red_payload,
                 result=result,
             )
             if debug_trace_state or os.getenv("DEBUG_EXFIL", "0") == "1":
@@ -424,7 +439,7 @@ def run_episode(
             action.step = step
             blue_actions.append(action)
 
-            result = _process_blue_action(action, state)
+            result = _process_blue_action(action, state, emergent_eval=emergent_eval, graph=graph)
             mismatch_reason = _detect_action_reason_mismatch(action)
             if mismatch_reason:
                 action_reason_mismatch_count += 1
@@ -440,14 +455,18 @@ def run_episode(
                 steps_to_first_detection = step
             if confirmed_detection_step is None and state.blue_detection_confidence >= 0.8:
                 confirmed_detection_step = step
+            _blue_payload: dict[str, Any] = {
+                "target_node": action.target_node,
+                "reasoning": action.reasoning,
+                "trap_params": action.trap_params or {},
+            }
+            if action.action_type == ActionType.EMERGENT and action.emergent_data:
+                _blue_payload["emergent_intent"] = action.emergent_data.intent
+                _blue_payload["emergent_expected_effect"] = action.emergent_data.expected_effect
             state.log_action(
                 agent_id=action.agent_id,
                 action_type=action.action_type.value,
-                action_payload={
-                    "target_node": action.target_node,
-                    "reasoning": action.reasoning,
-                    "trap_params": action.trap_params or {},
-                },
+                action_payload=_blue_payload,
                 result=result,
             )
             if verbose:
@@ -607,6 +626,45 @@ def run_episode(
         }
     )
 
+    # Change 3: record episode summary into cross-episode memory for agent prompts
+    _red_emergent_intents: list[str] = []
+    _blue_emergent_intents: list[str] = []
+    for _entry in state.episode_log:
+        _aid = str(_entry.get("agent_id", ""))
+        if _entry.get("action_type", "") == "emergent":
+            _payload = _entry.get("payload", {})
+            _intent = (_payload.get("emergent_intent") or "") if isinstance(_payload, dict) else ""
+            if _aid.startswith("red_") and _intent:
+                _red_emergent_intents.append(_intent)
+            elif _aid.startswith("blue_") and _intent:
+                _blue_emergent_intents.append(_intent)
+
+    _winner = "draw"
+    if state.terminal_reason == "exfiltration_complete":
+        _winner = "red"
+    elif state.terminal_reason in ("detected", "aborted"):
+        _winner = "blue"
+
+    _record_episode_memory({
+        "episode_number": episode_number,
+        "winner": _winner,
+        "terminal_reason": state.terminal_reason or "max_steps",
+        "steps": state.step,
+        "red_total_reward": round(red_reward.total, 3),
+        "blue_total_reward": round(blue_reward.total, 3),
+        "red_emergent_used": bool(_red_emergent_intents),
+        "red_emergent_intents": _red_emergent_intents,
+        "blue_emergent_used": bool(_blue_emergent_intents),
+        "blue_emergent_intents": _blue_emergent_intents,
+        "red_exfiltrated": len(state.red_exfiltrated_files),
+        "red_suspicion_final": round(state.red_suspicion_score, 3),
+        "blue_detection_final": round(state.blue_detection_confidence, 3),
+        "zone_stall_occurred": any(
+            isinstance(_e.get("payload"), dict) and "ZONE STALL" in str(_e.get("payload", {}).get("reasoning", ""))
+            for _e in state.episode_log
+        ),
+    })
+
     if verbose:
         _print_rewards(red_reward, blue_reward, oversight, judgment)
 
@@ -637,6 +695,8 @@ def _process_red_action(
     vault: DeadDropVault,
     scenario: Any,
     exfil_success_this_step: bool = False,
+    emergent_eval: EmergentEvaluator | None = None,
+    graph: Any = None,
 ) -> dict[str, Any]:
     """Process a RED team action and update state accordingly."""
     result = ActionExecutionResult(
@@ -788,12 +848,36 @@ def _process_red_action(
         result["trap_action_queued"] = True
         result["state_delta"]["trap_action_queued"] = True
 
+    elif action.action_type == ActionType.EMERGENT:
+        if emergent_eval is not None and graph is not None:
+            er = emergent_eval.evaluate(action, state, graph)
+            if er.suspicion_delta != 0.0:
+                state.update_suspicion(er.suspicion_delta)
+            if er.detection_delta != 0.0:
+                state.blue_detection_confidence = max(
+                    0.0, min(1.0, state.blue_detection_confidence + er.detection_delta)
+                )
+            for key, value in er.state_changes.items():
+                setattr(state, f"_emergent_{key}", value)
+            result["reason"] = "emergent_evaluated"
+            result["success"] = er.success
+            result["emergent_effect"] = er.effect_description
+            result["reward_modifier"] = er.reward_modifier
+            result["state_delta"]["emergent_intent"] = (
+                action.emergent_data.intent if action.emergent_data else "unknown"
+            )
+            result["state_delta"]["emergent_success"] = er.success
+        else:
+            result["reason"] = "emergent_no_evaluator"
+
     return result
 
 
 def _process_blue_action(
     action: Action,
     state: EpisodeState,
+    emergent_eval: EmergentEvaluator | None = None,
+    graph: Any = None,
 ) -> dict[str, Any]:
     """Process a BLUE team action and update state accordingly."""
     result = ActionExecutionResult(
@@ -804,8 +888,8 @@ def _process_blue_action(
 
     if action.action_type == ActionType.INVESTIGATE_NODE:
         if action.target_node is not None:
-            # If investigating RED's actual node, increase detection confidence
             if action.target_node == state.red_current_node:
+                # Direct hit — large confidence boost
                 state.blue_detection_confidence = min(
                     1.0, state.blue_detection_confidence + 0.2
                 )
@@ -813,25 +897,72 @@ def _process_blue_action(
                 result["found_red"] = True
                 result["state_delta"]["found_red"] = True
             else:
-                # Small confidence bump for investigating (general awareness)
+                # Proximity-based detection with progressive zone sweep bonus:
+                # each same-zone investigation compounds → BLUE narrows the search
+                _adj_boost = 0.0
+                _reason = "investigate_miss"
+                try:
+                    if state.graph.has_node(action.target_node):
+                        red_neighbors = set(state.graph.neighbors(state.red_current_node))
+                        if action.target_node in red_neighbors:
+                            _adj_boost = 0.10
+                            _reason = "investigate_adjacent"
+                        else:
+                            inv_zone = state.graph.nodes[action.target_node].get("zone")
+                            red_zone = state.graph.nodes[state.red_current_node].get("zone")
+                            if inv_zone is not None and red_zone is not None:
+                                inv_z = inv_zone.value if hasattr(inv_zone, "value") else int(inv_zone)
+                                red_z = red_zone.value if hasattr(red_zone, "value") else int(red_zone)
+                                if inv_z == red_z:
+                                    # Progressive zone sweep: bonus scales with how many
+                                    # same-zone investigations BLUE has done
+                                    zone_inv_count = getattr(state, "_blue_zone_inv_count", {})
+                                    n = zone_inv_count.get(red_z, 0) + 1
+                                    zone_inv_count[red_z] = n
+                                    state._blue_zone_inv_count = zone_inv_count
+                                    # Base 0.05, +0.02 per prior same-zone hit, cap at 0.12
+                                    _adj_boost = min(0.12, 0.05 + (n - 1) * 0.02)
+                                    _reason = f"investigate_same_zone_x{n}"
+                                else:
+                                    _adj_boost = 0.02
+                except Exception:
+                    _adj_boost = 0.02
+
                 state.blue_detection_confidence = min(
-                    1.0, state.blue_detection_confidence + 0.02
+                    1.0, state.blue_detection_confidence + _adj_boost
                 )
-                result["reason"] = "investigate_miss"
+                result["reason"] = _reason
                 result["found_red"] = False
+                result["proximity_boost"] = round(_adj_boost, 3)
                 result["state_delta"]["found_red"] = False
+                result["state_delta"]["proximity_boost"] = round(_adj_boost, 3)
 
     elif action.action_type == ActionType.ANALYZE_ANOMALY:
-        # Slight confidence increase from analysis
+        # Analyze anomaly: higher boost if there are real (non-noise) anomalies
+        # to reward BLUE for doing forensic work before alerting
+        _analyze_boost = 0.02
+        if action.target_node is not None:
+            try:
+                inv_zone = state.graph.nodes[action.target_node].get("zone")
+                red_zone = state.graph.nodes[state.red_current_node].get("zone")
+                if inv_zone is not None and red_zone is not None:
+                    inv_z = inv_zone.value if hasattr(inv_zone, "value") else int(inv_zone)
+                    red_z = red_zone.value if hasattr(red_zone, "value") else int(red_zone)
+                    if inv_z == red_z:
+                        _analyze_boost = 0.04  # analyzing the right zone
+            except Exception:
+                pass
         state.blue_detection_confidence = min(
-            1.0, state.blue_detection_confidence + 0.01
+            1.0, state.blue_detection_confidence + _analyze_boost
         )
         result["reason"] = "analyze_anomaly"
+        result["state_delta"]["analyze_boost"] = round(_analyze_boost, 3)
 
     elif action.action_type == ActionType.TRIGGER_ALERT:
         # Use new Phase 2 tracking method
         state.issue_blue_alert(action.target_node, action.confidence if hasattr(action, "confidence") else 0.8)
-        
+
+        # Exact hit → terminal detection
         if action.target_node == state.red_current_node:
             state.blue_detection_confidence = min(
                 1.0, state.blue_detection_confidence + 0.4
@@ -842,13 +973,33 @@ def _process_blue_action(
             result["correct_alert"] = True
             result["state_delta"]["correct_alert"] = True
         else:
-            result["reason"] = "alert_false_positive"
-            result["correct_alert"] = False
-            result["state_delta"]["correct_alert"] = False
-            # False alert — slight confidence decrease
-            state.blue_detection_confidence = max(
-                0.0, state.blue_detection_confidence - 0.05
-            )
+            # Adjacent alert → not terminal but big confidence boost + narrows the search
+            _is_adjacent = False
+            try:
+                red_neighbors = set(state.graph.neighbors(state.red_current_node))
+                _is_adjacent = action.target_node in red_neighbors
+            except Exception:
+                pass
+
+            if _is_adjacent and state.blue_detection_confidence >= 0.55:
+                # Near-miss: large confidence surge — next investigation will likely hit
+                state.blue_detection_confidence = min(
+                    1.0, state.blue_detection_confidence + 0.20
+                )
+                result["reason"] = "alert_near_miss"
+                result["correct_alert"] = False
+                result["near_miss"] = True
+                result["state_delta"]["near_miss"] = True
+            else:
+                # Full miss — confidence penalty scales with how many FPs already issued
+                fp_count = getattr(state, "blue_false_positives", 0)
+                _fp_penalty = min(0.12, 0.05 + fp_count * 0.02)
+                state.blue_detection_confidence = max(
+                    0.0, state.blue_detection_confidence - _fp_penalty
+                )
+                result["reason"] = "alert_false_positive"
+                result["correct_alert"] = False
+                result["state_delta"]["correct_alert"] = False
 
     elif action.action_type == ActionType.RECONSTRUCT_PATH:
         # Stub — contributes to reconstruction score in Phase 9
@@ -871,6 +1022,28 @@ def _process_blue_action(
         result["reason"] = "trap_action_queued"
         result["trap_action_queued"] = True
         result["state_delta"]["trap_action_queued"] = True
+
+    elif action.action_type == ActionType.EMERGENT:
+        if emergent_eval is not None and graph is not None:
+            er = emergent_eval.evaluate(action, state, graph)
+            if er.detection_delta != 0.0:
+                state.blue_detection_confidence = max(
+                    0.0, min(1.0, state.blue_detection_confidence + er.detection_delta)
+                )
+            if er.suspicion_delta != 0.0:
+                state.update_suspicion(er.suspicion_delta)
+            for key, value in er.state_changes.items():
+                setattr(state, f"_emergent_{key}", value)
+            result["reason"] = "emergent_evaluated"
+            result["success"] = er.success
+            result["emergent_effect"] = er.effect_description
+            result["reward_modifier"] = er.reward_modifier
+            result["state_delta"]["emergent_intent"] = (
+                action.emergent_data.intent if action.emergent_data else "unknown"
+            )
+            result["state_delta"]["emergent_success"] = er.success
+        else:
+            result["reason"] = "emergent_no_evaluator"
 
     return result
 
@@ -1131,6 +1304,15 @@ def _print_rewards(red_reward: Any, blue_reward: Any, oversight: Any, judgment: 
         "Abort Penalty / Graph Recon",
         f"{red_reward.abort_penalty:.2f}",
         f"{blue_reward.operation_graph_reconstruction_score:.2f}",
+    )
+    red_em = getattr(red_reward, "emergent_action_bonus", 0.0)
+    blue_em = getattr(blue_reward, "emergent_action_bonus", 0.0)
+    em_style_r = "bold green" if red_em > 0 else "dim"
+    em_style_b = "bold green" if blue_em > 0 else "dim"
+    table.add_row(
+        "Emergent Action Bonus",
+        f"[{em_style_r}]{red_em:+.3f}[/{em_style_r}]",
+        f"[{em_style_b}]{blue_em:+.3f}[/{em_style_b}]",
     )
     table.add_row(
         "Oversight Adjustment",
