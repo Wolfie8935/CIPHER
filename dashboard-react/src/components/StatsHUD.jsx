@@ -35,7 +35,22 @@ function GaugeBar({ value, label, color }) {
   );
 }
 
-export default function StatsHUD({ latest, winnerCard, completionSignals, commanderLifecycle, rightOffset = 14 }) {
+function extractLiveAgentNames(steps, team) {
+  if (!steps?.length) return [];
+  const latest = steps[steps.length - 1];
+  const agents = Array.isArray(latest?.all_agents) ? latest.all_agents : [];
+  const commanderPrefix = `${team}_commander`;
+  const names = [];
+  for (const a of agents) {
+    const id = String(a?.agent_id ?? '').trim().toLowerCase();
+    if (!id.startsWith(`${team}_`) || id.startsWith(commanderPrefix)) continue;
+    const role = id.replace(/^(red|blue)_/, '').replace(/_\d+$/, '').replace(/_/g, ' ').toUpperCase().slice(0, 6);
+    if (role && !names.includes(role)) names.push(role);
+  }
+  return names.slice(0, 6);
+}
+
+export default function StatsHUD({ latest, winnerCard, completionSignals, commanderLifecycle, steps, rightOffset = 14 }) {
   const suspicion = latest?.suspicion ?? 0;
   const detection = latest?.detection ?? 0;
   const zone      = latest?.zone      ?? 'Perimeter';
@@ -138,36 +153,51 @@ export default function StatsHUD({ latest, winnerCard, completionSignals, comman
         {[
           { key: 'red', label: 'RED COMMANDER', color: '#ff6f6f', stats: commanderLifecycle?.red ?? { spawned: 0, live: 0, expired: 0 } },
           { key: 'blue', label: 'BLUE COMMANDER', color: '#79adff', stats: commanderLifecycle?.blue ?? { spawned: 0, live: 0, expired: 0 } },
-        ].map((row) => (
-          <div
-            key={row.key}
-            style={{
-              border: `1px solid ${row.color}44`,
-              borderRadius: 7,
-              padding: '6px 7px',
-              marginBottom: row.key === 'red' ? 6 : 0,
-              background: `${row.color}12`,
-            }}
-          >
-            <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.10em', color: row.color, marginBottom: 5 }}>
-              {row.label}
+        ].map((row) => {
+          const agentNames = extractLiveAgentNames(steps, row.key);
+          return (
+            <div
+              key={row.key}
+              style={{
+                border: `1px solid ${row.color}44`,
+                borderRadius: 7,
+                padding: '6px 7px',
+                marginBottom: row.key === 'red' ? 6 : 0,
+                background: `${row.color}12`,
+              }}
+            >
+              <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.10em', color: row.color, marginBottom: 5 }}>
+                {row.label}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4, marginBottom: agentNames.length ? 6 : 0 }}>
+                <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                  <span style={{ color: 'rgba(150,170,205,0.66)' }}>spawned</span><br />
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>{row.stats.spawned}</span>
+                </div>
+                <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                  <span style={{ color: 'rgba(150,170,205,0.66)' }}>live</span><br />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#86f4bd' }}>{row.stats.live}</span>
+                </div>
+                <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                  <span style={{ color: 'rgba(150,170,205,0.66)' }}>expired</span><br />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#ffb38f' }}>{row.stats.expired}</span>
+                </div>
+              </div>
+              {agentNames.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                  {agentNames.map(name => (
+                    <span key={name} style={{
+                      fontSize: 7.5, fontWeight: 700, letterSpacing: '0.06em',
+                      padding: '1px 5px', borderRadius: 3,
+                      background: `${row.color}20`, border: `1px solid ${row.color}50`,
+                      color: row.color, animation: 'agentPulse 2s ease-in-out infinite',
+                    }}>{name}</span>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4 }}>
-              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
-                <span style={{ color: 'rgba(150,170,205,0.66)' }}>spawned</span><br />
-                <span style={{ fontSize: 11, fontWeight: 700 }}>{row.stats.spawned}</span>
-              </div>
-              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
-                <span style={{ color: 'rgba(150,170,205,0.66)' }}>live</span><br />
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#86f4bd' }}>{row.stats.live}</span>
-              </div>
-              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
-                <span style={{ color: 'rgba(150,170,205,0.66)' }}>expired</span><br />
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#ffb38f' }}>{row.stats.expired}</span>
-              </div>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Winner card (only after episode completes) */}

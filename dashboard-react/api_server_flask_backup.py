@@ -941,23 +941,10 @@ def rl_stats():
             "steps_norm": round(st / float(max_steps_denom), 4),
         })
 
-    # Full convergence data — all episodes (downsampled for large runs)
-    all_rows = rows  # full dataset
-    if len(all_rows) > 500:
-        # Downsample evenly to keep max 500 points
-        step = len(all_rows) // 500
-        all_rows = all_rows[::step]
-    all_red = [_f(r.get("red_total", 0)) for r in all_rows]
-    all_blue = [_f(r.get("blue_total", 0)) for r in all_rows]
-    all_eps = [int(_f(r.get("episode", 0))) for r in all_rows]
-
     return jsonify({
         "episodes":          ep_nums,
         "red_totals":        red_totals,
         "blue_totals":       blue_totals,
-        "all_red_totals":    all_red,
-        "all_blue_totals":   all_blue,
-        "all_episodes":      all_eps,
         "win_rate_red":      round(red_wins / total, 3),
         "win_rate_blue":     round(blue_wins / total, 3),
         "win_rate_red_10":   round(red_win_rate_10, 3),
@@ -1129,27 +1116,6 @@ def lore_reports():
         return jsonify(out)
     except Exception:
         return jsonify([])
-
-
-@app.route("/api/forensics")
-def forensics_latest():
-    """Return the most recent forensics reconstruction from episode traces."""
-    try:
-        traces_dir = ROOT / "episode_traces"
-        if not traces_dir.exists():
-            return jsonify(None)
-        files = sorted(traces_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for f in files[:5]:
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                recon = data.get("forensics_reconstruction")
-                if recon:
-                    return jsonify(recon)
-            except Exception:
-                continue
-        return jsonify(None)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # ── Entry point ──────────────────────────────────────────────────────

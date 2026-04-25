@@ -860,6 +860,23 @@ def run_episode(
     red_reward.total = round(red_reward.total, 4)
     blue_reward.total = round(blue_reward.total, 4)
 
+    # ── Forensics reconstruction (Task 6) — runs before logging so CSV gets grades ──
+    forensics_recon = None
+    try:
+        from cipher.agents.blue.forensics_analyzer import reconstruct_crime_scene
+        forensics_recon = reconstruct_crime_scene(
+            state=state,
+            episode_log=list(state.episode_log),
+            forensics_agent=forensics_for_reward,
+        )
+        logger.info(
+            "Forensics Grade: %s (accuracy: %.0f%%)",
+            forensics_recon.investigation_grade,
+            forensics_recon.path_accuracy * 100,
+        )
+    except Exception as _fe:
+        logger.debug("Forensics reconstruction skipped: %s", _fe)
+
     logger_instance = RewardLogger()
     logger_instance.log(
         episode=episode_number,
@@ -870,6 +887,7 @@ def run_episode(
         oversight=oversight,
         judgment=judgment,
         difficulty_params=dp,
+        forensics_recon=forensics_recon,
     )
 
     _EPISODE_HISTORY.append(
@@ -925,6 +943,7 @@ def run_episode(
         _print_rewards(red_reward, blue_reward, oversight, judgment)
 
     # ── Save trace ───────────────────────────────────────────────
+
     if save_trace:
         commander_meta: dict[str, Any] | None = None
         if use_v2:
@@ -953,7 +972,11 @@ def run_episode(
                     ),
                 },
             }
-        _save_episode_trace(state, episode_number, verbose=verbose, commander_meta=commander_meta, difficulty_params=dp)
+        _save_episode_trace(
+            state, episode_number, verbose=verbose,
+            commander_meta=commander_meta, difficulty_params=dp,
+            forensics_recon=forensics_recon,
+        )
 
     result_payload = {
         "red_reward": red_reward,
@@ -967,6 +990,7 @@ def run_episode(
         "oversight_step_penalty_red": round(oversight_step_penalty_red, 4),
         "oversight_step_penalty_blue": round(oversight_step_penalty_blue, 4),
         "difficulty_params": dp,
+        "forensics_reconstruction": forensics_recon.to_dict() if forensics_recon else None,
     }
     if return_payload_mode:
         return result_payload
@@ -1658,6 +1682,7 @@ def _save_episode_trace(
     verbose: bool = True,
     commander_meta: dict[str, Any] | None = None,
     difficulty_params: dict | None = None,
+    forensics_recon: Any = None,
 ) -> None:
     """Save the full episode trace to a JSON file."""
     import json
@@ -1689,6 +1714,11 @@ def _save_episode_trace(
     }
     if commander_meta is not None:
         trace["commanders"] = commander_meta
+    if forensics_recon is not None:
+        try:
+            trace["forensics_reconstruction"] = forensics_recon.to_dict()
+        except Exception:
+            trace["forensics_reconstruction"] = str(forensics_recon)
 
     with open(trace_path, "w", encoding="utf-8") as f:
         json.dump(trace, f, indent=2, default=str)

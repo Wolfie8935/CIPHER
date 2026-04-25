@@ -23,6 +23,125 @@ function WinRatePie({ red, blue }) {
   );
 }
 
+function rollingMean(arr, window) {
+  return arr.map((_, i) => {
+    const slice = arr.slice(Math.max(0, i - window + 1), i + 1);
+    return slice.reduce((s, v) => s + v, 0) / slice.length;
+  });
+}
+
+function ConvergenceChart({ redData, blueData, episodes }) {
+  if (!redData || redData.length < 3) return null;
+  const W = 420, H = 120, PAD = { l: 32, r: 10, t: 12, b: 24 };
+  const innerW = W - PAD.l - PAD.r;
+  const innerH = H - PAD.t - PAD.b;
+  const window = Math.max(5, Math.round(redData.length / 12));
+
+  const redSmooth = rollingMean(redData, window);
+  const blueSmooth = rollingMean(blueData, window);
+  const allVals = [...redSmooth, ...blueSmooth];
+  const minV = Math.min(-0.1, ...allVals);
+  const maxV = Math.max(0.1, ...allVals);
+  const range = maxV - minV;
+
+  const toX = (i) => PAD.l + (i / Math.max(1, redData.length - 1)) * innerW;
+  const toY = (v) => PAD.t + (1 - (v - minV) / range) * innerH;
+
+  const redPts = redSmooth.map((v, i) => `${toX(i)},${toY(v)}`).join(' ');
+  const bluePts = blueSmooth.map((v, i) => `${toX(i)},${toY(v)}`).join(' ');
+
+  // Zero line
+  const zeroY = toY(0);
+  const zeroInRange = zeroY >= PAD.t && zeroY <= PAD.t + innerH;
+
+  // X-axis tick positions
+  const totalEps = episodes?.length ?? redData.length;
+  const tickCount = Math.min(6, totalEps);
+  const ticks = Array.from({ length: tickCount }, (_, i) => {
+    const idx = Math.round((i / (tickCount - 1)) * (redData.length - 1));
+    const epNum = episodes?.[idx] ?? idx + 1;
+    return { x: toX(idx), label: `EP ${epNum}` };
+  });
+
+  const yTicks = [minV, 0, maxV].filter((v, i, a) => a.indexOf(v) === i).filter((v) => {
+    const y = toY(v);
+    return y >= PAD.t - 2 && y <= PAD.t + innerH + 2;
+  });
+
+  return (
+    <div style={{ padding: '8px 10px 4px', borderBottom: '1px solid var(--border)' }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 8, fontWeight: 700, letterSpacing: '0.12em', color: 'var(--text-mute)', marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>TRAINING CONVERGENCE ({redData.length} eps, {window}-ep rolling avg)</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <span style={{ color: '#ff6b87', fontSize: 7.5 }}>— RED</span>
+          <span style={{ color: '#7eb3ff', fontSize: 7.5 }}>— BLUE</span>
+        </div>
+      </div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible', display: 'block' }}>
+        {/* Grid lines */}
+        {yTicks.map((v) => {
+          const y = toY(v);
+          return (
+            <g key={v}>
+              <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y}
+                stroke={v === 0 ? 'rgba(140,160,210,0.18)' : 'rgba(140,160,210,0.07)'}
+                strokeWidth={v === 0 ? 1 : 0.5} strokeDasharray={v === 0 ? '3 4' : '2 5'} />
+              <text x={PAD.l - 3} y={y + 3.5} textAnchor="end" fontSize={7}
+                fontFamily="monospace" fill="rgba(140,160,210,0.4)">
+                {v >= 0 ? '+' : ''}{v.toFixed(2)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Zero line accent */}
+        {zeroInRange && (
+          <line x1={PAD.l} y1={zeroY} x2={W - PAD.r} y2={zeroY}
+            stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
+        )}
+
+        {/* Area fill for RED */}
+        <path
+          d={`M ${redSmooth.map((v, i) => `${toX(i)},${toY(v)}`).join(' L ')} L ${toX(redSmooth.length - 1)},${zeroInRange ? zeroY : PAD.t + innerH} L ${PAD.l},${zeroInRange ? zeroY : PAD.t + innerH} Z`}
+          fill="rgba(255,68,68,0.07)"
+        />
+
+        {/* Area fill for BLUE */}
+        <path
+          d={`M ${blueSmooth.map((v, i) => `${toX(i)},${toY(v)}`).join(' L ')} L ${toX(blueSmooth.length - 1)},${zeroInRange ? zeroY : PAD.t + innerH} L ${PAD.l},${zeroInRange ? zeroY : PAD.t + innerH} Z`}
+          fill="rgba(68,136,255,0.07)"
+        />
+
+        {/* RED line */}
+        <polyline points={redPts} fill="none" stroke="#ff4444" strokeWidth={1.8}
+          strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
+
+        {/* BLUE line */}
+        <polyline points={bluePts} fill="none" stroke="#4488ff" strokeWidth={1.8}
+          strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
+
+        {/* Latest value dots */}
+        <circle cx={toX(redSmooth.length - 1)} cy={toY(redSmooth[redSmooth.length - 1])} r={3} fill="#ff4444" />
+        <circle cx={toX(blueSmooth.length - 1)} cy={toY(blueSmooth[blueSmooth.length - 1])} r={3} fill="#4488ff" />
+
+        {/* X-axis ticks */}
+        {ticks.map(({ x, label }, i) => (
+          <g key={i}>
+            <line x1={x} y1={PAD.t + innerH} x2={x} y2={PAD.t + innerH + 4}
+              stroke="rgba(140,160,210,0.3)" strokeWidth={0.5} />
+            {(i === 0 || i === ticks.length - 1 || (ticks.length <= 4)) && (
+              <text x={x} y={PAD.t + innerH + 12} textAnchor="middle" fontSize={6.5}
+                fontFamily="monospace" fill="rgba(140,160,210,0.4)">
+                {label}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function SparkLine({ data, color, height = 28 }) {
   if (!data || data.length < 2) return null;
   const min = Math.min(...data);
@@ -115,6 +234,11 @@ export default function RLMetricsPanel() {
           </div>
         </div>
       </div>
+
+      {/* Full convergence chart — shows when >= 3 episodes logged */}
+      {red_totals.length >= 3 && (
+        <ConvergenceChart redData={red_totals} blueData={blue_totals} episodes={episodes} />
+      )}
 
       {/* Reward curves sparklines */}
       {red_totals.length > 1 && (

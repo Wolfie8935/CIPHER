@@ -102,3 +102,8 @@ OUTPUT FORMAT (always valid JSON, no other text):
   "target_file": null,
   "reasoning": "<your one-sentence deception strategy â€” must be consistent with action_type>"
 }
+
+
+## LEARNED HEURISTICS (Auto-evolved)
+- LEARNED: Honeypot trigger rate is only 2%. Place honeypots on zone 1→2 and zone 2→3 boundary nodes for 3x higher trigger probability.
+- LEARNED: Mean false positive penalty is 0.83. Investigate only nodes with anomaly scores above 0.6. Precision over recall.

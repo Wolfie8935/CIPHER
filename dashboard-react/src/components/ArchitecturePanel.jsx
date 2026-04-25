@@ -1,30 +1,57 @@
 import { useCallback, useEffect, useState } from 'react';
-
-// Build-time snapshot of repo-root architecture doc (kept in sync with Flask `/api/architecture-doc`)
-import changedMdRaw from '../../../changed.md?raw';
 import architectureV2Annotated from '../../../assets/architecture_v2_annotated.png';
 
-const FALLBACK_MARKDOWN =
-  typeof changedMdRaw === 'string' && changedMdRaw.trim()
-    ? changedMdRaw
-    : `# CIPHER system — what changed (architecture snapshot)
+const FALLBACK_MARKDOWN = `# CIPHER v2 Architecture — Commander + Subagent Model
 
-## War room (React + Vite)
+## Overview
 
-- **\`dashboard-react/\`** — CIPHER War Room UI: live map, agent thoughts, analytics, and replay of \`episode_traces/\`.
-- **Dev** — Vite on port \`5173\` with **\`/api\` → \`http://localhost:5001\`** (Flask). **Prod** — build to \`dist/\`; Flask serves static assets and APIs from the same origin.
+CIPHER puts two LLM-powered commanders in direct adversarial conflict inside a 50-node
+enterprise network. Each commander dynamically spawns specialist subagents on demand.
 
-## Flask API
+## RED Team
 
-- **\`dashboard-react/api_server.py\`** — reads project-root JSON/JSONL (\`live_steps.jsonl\`, \`logs/agent_*.jsonl\`, traces) and exposes REST endpoints for the dashboard.
+- **RED Commander** — top-level attacker brain (Llama-3.1-8B). Decides strategy, spawns subagents.
+- **Spawned subagents** — Planner (long-horizon), Analyst (belief mapping), Operative (stealth movement), Exfiltrator (file extraction). Spawned on demand; dismissed when task complete.
+- Goal: traverse Zones 0→1→2→3 and exfiltrate the classified file without detection.
 
-## Python environment (CIPHER)
+## BLUE Team
 
-- **\`main.py\`**, **\`cipher/\`** — multi-agent cyber-ops RL environment: RED/BLUE commanders, subagents, dead drops, zones, and oversight. Training hooks write logs the war room consumes.
+- **BLUE Commander** — top-level defender brain. Decides which specialists to deploy.
+- **Spawned subagents** — Surveillance (anomaly feed), Threat Hunter (active investigation), Deception Architect (honeypots), Forensics (path reconstruction). Auto-spawned on escalating detection signals.
+- Goal: detect RED, reconstruct RED's path, and trigger the correct alert.
 
-## Data flow (high level)
+## Oversight Auditor
 
-- Training/simulation steps → \`live_steps.jsonl\` / traces → **Flask** → **React** charts & map. Agent telemetry → \`logs/\`.
+- Independent 9th LLM that watches both teams every episode.
+- Issues verdicts: \`red_dominates\` | \`blue_dominates\` | \`contested\` | \`degenerate\`.
+- Detects reward hacking and collusion. Applies fleet bonuses (±0.15).
+
+## Data Flow
+
+\`\`\`
+Training / main.py run
+  → live_steps.jsonl + episode_traces/ + logs/
+    → API Server (:5001)
+      → React War Room (:5173 / dist/)
+\`\`\`
+
+## Key Mechanics
+
+- **Asymmetric observations** — RED sees the network map (honeypots masked). BLUE sees only an anomaly feed (not RED's position).
+- **Dead-drop vault** — SHA-256 encrypted inter-agent memory with token budgets. BLUE can tamper with drops.
+- **12 trap types** — FalseTrail, HoneypotPoison, DeadDropTamper, Breadcrumb, TemporalDecoy, ...
+- **Dynamic difficulty** — 6-axis curriculum driven by rolling RED win rate (openenv.yaml curriculum block).
+- **Self-play pipeline** — failure_cases.jsonl + success_cases.jsonl mined each episode for LoRA fine-tuning.
+
+## Quick Start
+
+\`\`\`bash
+python main.py                    # single episode, stub (no API)
+python main.py --live             # live HF inference
+python main.py --live --episodes 5
+python main.py --train            # training loop
+python verify_openenv.py          # compliance check
+\`\`\`
 `;
 
 const cardBase = {
@@ -144,71 +171,121 @@ function SectionBody({ body }) {
   return <div className="arch-md-body">{out}</div>;
 }
 
+// ── v2 Commander + Subagent flow diagram ──────────────────────────────────────
 function ArchitectureFlowDiagram() {
+  const teamBox = (color, border, title, sub, agents) => ({
+    background: color,
+    border: `1.5px solid ${border}`,
+    borderRadius: 10,
+    padding: '12px 16px',
+    minWidth: 200,
+    maxWidth: 240,
+  });
+
   return (
-    <div className="arch-flow" aria-label="System architecture layers">
-      <div className="arch-flow-glow" aria-hidden />
-      <div className="arch-layer arch-layer--hero">
-        <div className="arch-card-wrap arch-card-wrap--cyan">
-          <div className="arch-card">
-            <span className="arch-card-icon" aria-hidden>
-              ⚛
-            </span>
-            <div className="arch-card-text">
-              <div className="arch-card-title">War room</div>
-              <div className="arch-card-sub">React · Vite · /api → proxy</div>
-            </div>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+      {/* Top row: Oversight */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
+        <div style={{
+          background: 'rgba(40,80,20,0.55)', border: '1.5px solid #4caf50',
+          borderRadius: 10, padding: '10px 20px', textAlign: 'center',
+        }}>
+          <div style={{ color: '#4caf50', fontWeight: 700, fontSize: 13 }}>Oversight Auditor</div>
+          <div style={{ color: '#8bc34a', fontSize: 11, marginTop: 2 }}>9th independent LLM · fleet verdicts · reward-hacking detection</div>
+        </div>
+      </div>
+
+      {/* Oversight arrows down */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 260, color: '#4caf50', fontSize: 18 }}>
+        <span>↓</span><span>↓</span>
+      </div>
+
+      {/* Middle row: RED Commander | Episode Runner | BLUE Commander */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginTop: 4 }}>
+
+        {/* RED side */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          <div style={{
+            background: 'rgba(80,10,10,0.65)', border: '1.5px solid #ff4444',
+            borderRadius: 10, padding: '12px 16px', minWidth: 220, textAlign: 'center',
+          }}>
+            <div style={{ color: '#ff4444', fontWeight: 700, fontSize: 14 }}>RED Commander</div>
+            <div style={{ color: '#ff8888', fontSize: 11, marginTop: 2 }}>commander.py · Llama-3.1-8B</div>
+          </div>
+          <div style={{ color: '#ff4444', fontSize: 16 }}>↓ spawns</div>
+          <div style={{
+            background: 'rgba(60,10,10,0.55)', border: '1px solid #cc3333',
+            borderRadius: 8, padding: '8px 14px', minWidth: 220,
+          }}>
+            <div style={{ color: '#ffaaaa', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Dynamic subagents</div>
+            {['Planner', 'Analyst', 'Operative', 'Exfiltrator'].map(r => (
+              <div key={r} style={{ color: '#ff7777', fontSize: 11, marginBottom: 2 }}>· {r}</div>
+            ))}
+          </div>
+        </div>
+
+        {/* Episode Runner center */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingTop: 8 }}>
+          <div style={{ color: '#ff4444', fontSize: 18 }}>→</div>
+          <div style={{
+            background: 'rgba(20,30,60,0.85)', border: '1.5px solid #5588ff',
+            borderRadius: 10, padding: '12px 18px', textAlign: 'center', minWidth: 180,
+          }}>
+            <div style={{ color: '#88aaff', fontWeight: 700, fontSize: 13 }}>Episode Runner</div>
+            <div style={{ color: '#6688cc', fontSize: 11, marginTop: 2 }}>_episode_runner.py</div>
+            <div style={{ color: '#6688cc', fontSize: 10, marginTop: 4 }}>EpisodeState · ScenarioGenerator</div>
+            <div style={{ color: '#6688cc', fontSize: 10, marginTop: 2 }}>50-node network · 4 zones</div>
+          </div>
+          <div style={{ color: '#4488ff', fontSize: 18 }}>←</div>
+        </div>
+
+        {/* BLUE side */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          <div style={{
+            background: 'rgba(10,10,80,0.65)', border: '1.5px solid #4488ff',
+            borderRadius: 10, padding: '12px 16px', minWidth: 220, textAlign: 'center',
+          }}>
+            <div style={{ color: '#4488ff', fontWeight: 700, fontSize: 14 }}>BLUE Commander</div>
+            <div style={{ color: '#8888ff', fontSize: 11, marginTop: 2 }}>commander.py · Llama-3.1-8B</div>
+          </div>
+          <div style={{ color: '#4488ff', fontSize: 16 }}>↓ spawns</div>
+          <div style={{
+            background: 'rgba(10,10,60,0.55)', border: '1px solid #3366cc',
+            borderRadius: 8, padding: '8px 14px', minWidth: 220,
+          }}>
+            <div style={{ color: '#aaaaff', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Dynamic subagents</div>
+            {['Surveillance', 'Threat Hunter', 'Deception Architect', 'Forensics'].map(r => (
+              <div key={r} style={{ color: '#7799ff', fontSize: 11, marginBottom: 2 }}>· {r}</div>
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="arch-connector" aria-hidden>
-        <span className="arch-connector-line" />
-        <span className="arch-connector-label">HTTP /api/*</span>
-        <span className="arch-connector-line" />
-      </div>
-
-      <div className="arch-layer arch-grid-2">
-        <div className="arch-card-wrap arch-card-wrap--blue">
-          <div className="arch-card arch-card--compact">
-            <span className="arch-card-icon" aria-hidden>
-              ◆
-            </span>
-            <div className="arch-card-text">
-              <div className="arch-card-title">Flask API</div>
-              <div className="arch-card-sub">api_server.py · :5001</div>
-            </div>
-          </div>
-        </div>
-        <div className="arch-card-wrap arch-card-wrap--amber">
-          <div className="arch-card arch-card--compact">
-            <span className="arch-card-icon" aria-hidden>
-              ⧉
-            </span>
-            <div className="arch-card-text">
-              <div className="arch-card-title">Data plane</div>
-              <div className="arch-card-sub">JSONL · traces · logs/</div>
-            </div>
-          </div>
+      {/* Bottom: data flow */}
+      <div style={{ color: '#555', fontSize: 18, marginTop: 10 }}>↓</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+        <div style={{
+          background: 'rgba(20,24,30,0.8)', border: '1px solid #334',
+          borderRadius: 8, padding: '8px 16px', textAlign: 'center',
+        }}>
+          <div style={{ color: '#8b949e', fontSize: 12, fontWeight: 600 }}>live_steps.jsonl · episode_traces/ · rewards_log.csv</div>
+          <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>→ API Server (:5001) → React War Room (:5173)</div>
         </div>
       </div>
 
-      <div className="arch-connector arch-connector--short" aria-hidden>
-        <span className="arch-connector-line" />
-      </div>
-
-      <div className="arch-layer">
-        <div className="arch-card-wrap arch-card-wrap--green">
-          <div className="arch-card">
-            <span className="arch-card-icon" aria-hidden>
-              ⬡
-            </span>
-            <div className="arch-card-text">
-              <div className="arch-card-title">Python CIPHER</div>
-              <div className="arch-card-sub">cipher/ · main.py · training · agents</div>
-            </div>
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 20, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
+        {[
+          ['#ff4444', 'RED team (attacker)'],
+          ['#4488ff', 'BLUE team (defender)'],
+          ['#4caf50', 'Oversight Auditor'],
+          ['#8b949e', 'Data / logs'],
+        ].map(([col, label]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 12, height: 12, borderRadius: 2, background: col }} />
+            <span style={{ color: '#8b949e', fontSize: 11 }}>{label}</span>
           </div>
-        </div>
+        ))}
       </div>
     </div>
   );
@@ -217,7 +294,6 @@ function ArchitectureFlowDiagram() {
 export default function ArchitecturePanel() {
   const [markdown, setMarkdown] = useState(FALLBACK_MARKDOWN);
   const [loading, setLoading] = useState(true);
-  /** Shown only after a completed fetch that did not use live API body (avoids banner before first try). */
   const [showOfflineHint, setShowOfflineHint] = useState(false);
 
   const load = useCallback(async () => {
@@ -254,7 +330,7 @@ export default function ArchitecturePanel() {
   return (
     <div className="arch-panel-root">
       <div className="arch-panel-header">
-        <h2 className="arch-panel-title">Architecture</h2>
+        <h2 className="arch-panel-title">Architecture — CIPHER v2</h2>
         <button type="button" className="arch-panel-refresh" onClick={load}>
           REFRESH
         </button>
@@ -262,27 +338,30 @@ export default function ArchitecturePanel() {
 
       {showOfflineHint && !loading && (
         <div className="arch-offline-banner" role="status">
-          Offline — showing cached copy
+          API offline — showing built-in v2 architecture
         </div>
       )}
+
+      <div className="arch-flow-wrap" style={{ marginBottom: 20 }}>
+        <div className="arch-flow-wrap-label" aria-hidden>
+          CIPHER v2 — Commander + Dynamic Subagent Model
+        </div>
+        <ArchitectureFlowDiagram />
+      </div>
 
       <figure className="arch-diagram-figure">
         <img
           src={architectureV2Annotated}
-          alt="CIPHER system architecture diagram v2, annotated layers and data flow"
+          alt="CIPHER v2 system architecture — commander and subagent model"
           className="arch-diagram-img"
           loading="lazy"
           decoding="async"
         />
-        <figcaption className="arch-diagram-caption">Repo asset: assets/architecture_v2_annotated.png</figcaption>
+        <figcaption className="arch-diagram-caption">
+          CIPHER v2: RED/BLUE commanders each spawn specialist subagents on demand.
+          Oversight Auditor judges both teams independently.
+        </figcaption>
       </figure>
-
-      <div className="arch-flow-wrap">
-        <div className="arch-flow-wrap-label" aria-hidden>
-          Stack overview
-        </div>
-        <ArchitectureFlowDiagram />
-      </div>
 
       {loading && <p className="arch-loading">Loading documentation…</p>}
 

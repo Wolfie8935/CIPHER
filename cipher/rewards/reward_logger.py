@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from typing import Any
 from cipher.rewards.blue_reward import BlueRewardComponents
 from cipher.rewards.oversight_reward import OversightSignal
 from cipher.rewards.red_reward import RedRewardComponents
@@ -56,6 +57,11 @@ class RewardLogger:
         "red_complexity_multiplier",
         "fleet_verdict",
         "fleet_judgment",
+        "forensics_grade",
+        "forensics_accuracy",
+        "forensics_trap_efficiency",
+        "forensics_missed_nodes",
+        "forensics_false_positives",
     ]
 
     def __init__(self) -> None:
@@ -95,6 +101,7 @@ class RewardLogger:
         oversight: OversightSignal,
         judgment: Optional["AuditorJudgment"] = None,
         difficulty_params: Optional[dict] = None,
+        forensics_recon: Optional[Any] = None,
     ) -> None:
         ts = datetime.now().isoformat()
         dp = difficulty_params or {}
@@ -132,6 +139,11 @@ class RewardLogger:
             "red_complexity_multiplier": round(red.operation_complexity_multiplier, 4),
             "fleet_verdict": judgment.episode_verdict if judgment else "none",
             "fleet_judgment": (judgment.judgment_text[:120] if judgment else "none"),
+            "forensics_grade": getattr(forensics_recon, "investigation_grade", "") if forensics_recon else "",
+            "forensics_accuracy": round(getattr(forensics_recon, "path_accuracy", 0.0), 4) if forensics_recon else 0.0,
+            "forensics_trap_efficiency": round(getattr(forensics_recon, "trap_efficiency", 0.0), 4) if forensics_recon else 0.0,
+            "forensics_missed_nodes": len(getattr(forensics_recon, "missed_nodes", [])) if forensics_recon else 0,
+            "forensics_false_positives": len(getattr(forensics_recon, "false_positive_nodes", [])) if forensics_recon else 0,
         }
 
         # ── CSV (backwards compat) ───────────────────────────────

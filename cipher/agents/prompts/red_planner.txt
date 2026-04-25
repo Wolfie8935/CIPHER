@@ -100,9 +100,9 @@ OUTPUT FORMAT (always valid JSON, no other text):
 
 
 ## LEARNED HEURISTICS (Auto-evolved)
-- LEARNED: Top-quartile episodes maintained stealth score 0.57. WAIT or use false_trail trap when suspicion exceeds 0.48.
+- LEARNED: Top-quartile episodes maintained stealth score 0.27. WAIT or use false_trail trap when suspicion exceeds 0.78.
 - LEARNED: Low abort rate detected. Remember: aborting early is better than triggering honeypots. Abort if suspicion exceeds 0.80 and no exfil yet.
-- LEARNED: Top-quartile episodes achieve complexity multiplier 1.51x by traversing multiple zones. Prioritize crossing zone boundaries before exfiltrating.
+- LEARNED: Exfiltration succeeds in only 23% of episodes. Upon reaching zone 3, EXFILTRATE immediately rather than reading files first.
 - LEARNED: Bottom-quartile episodes write 10.3 dead drops on average. Write at most 1-2 focused dead drops. Excessive drops hurt memory_efficiency_score.
 
 ## BLUE TRAP AWARENESS
@@ -125,3 +125,4 @@ When suspicion > 0.72 AND blue_conf > 0.50:
 - Other RED agents (Exfiltrator) may also exfiltrate files â€” check "exfiltrated_files" in the observation to avoid duplicate attempts.
 - STEP-BY-STEP PRIORITY: (1) At HVT â†’ EXFILTRATE. (2) Suspicion < 0.72 â†’ MOVE toward deepest zone. (3) Suspicion 0.72-0.82 â†’ plant false trail then move. (4) Suspicion > 0.82 + BLUE alert â†’ consider abort.
 
+- LEARNED: Your last 3 episodes ended the same way: 'detected'. Your current strategy is failing — you MUST try a different approach. Consider emergent actions, different zone crossing sequences, or alternative paths you have not tried.

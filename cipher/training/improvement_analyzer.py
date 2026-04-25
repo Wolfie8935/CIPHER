@@ -77,7 +77,12 @@ class ImprovementAnalyzer:
                 "red_complexity", "red_abort_penalty", "red_honeypot_penalty",
                 "blue_detection", "blue_speed", "blue_fp_penalty",
                 "blue_honeypot_rate", "blue_graph_reconstruction",
-                "red_complexity_multiplier",
+                "red_complexity_multiplier", "red_unique_nodes",
+                "red_drops_written", "red_traps_placed", "red_context_resets",
+                "oversight_red_adj", "oversight_blue_adj",
+                "red_emergent_bonus", "blue_emergent_bonus",
+                "forensics_accuracy", "forensics_trap_efficiency",
+                "forensics_missed_nodes", "forensics_false_positives",
             ):
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")

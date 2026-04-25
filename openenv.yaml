@@ -1,17 +1,19 @@
-# CIPHER — OpenEnv Environment Manifest
+# CIPHER — OpenEnv Environment Manifest (v2 Commander + Subagent Architecture)
 # Adversarial multi-agent RL environment for training LLM theory-of-mind reasoning.
 
-name: CIPHER-v1
-version: "1.0.0"
-display_name: "CIPHER: Adversarial Multi-Agent Cyber-Ops"
+name: CIPHER-v2
+version: "2.0.0"
+display_name: "CIPHER: Adversarial Multi-Agent Cyber-Ops (Commander + Subagent Model)"
 
 description: >
   CIPHER is a fully adversarial, asymmetric, partially observable multi-agent RL
-  environment. A RED team of 4 LLM-powered agents infiltrates a procedurally
-  generated 50-node enterprise network to steal a classified file. A BLUE team of
-  4 LLM agents defends using honeypots, dead drop tampering, and false escalations.
-  An independent Oversight Auditor (9th agent) judges every episode and detects
-  reward hacking. One env.step() = one complete episode. Trained agent: RED Planner.
+  environment. A RED Commander (1 LLM) infiltrates a procedurally generated 50-node
+  enterprise network to steal a classified file — dynamically spawning specialist
+  subagents (Planner, Analyst, Operative, Exfiltrator) on demand. A BLUE Commander
+  (1 LLM) defends using dynamically spawned specialists (Surveillance, ThreatHunter,
+  DeceptionArchitect, Forensics). An independent Oversight Auditor (9th LLM) judges
+  every episode and detects reward hacking. One env.step() = one complete episode.
+  Trained agents: RED Commander + specialist subagents via GRPO.
 
 theme: "Multi-Agent Interactions"
 hackathon: "OpenEnv Hackathon India 2026"
@@ -24,7 +26,8 @@ env_class: "cipher.env_wrapper:CIPHEREnv"
 observation_type: text
 action_type: text
 reward_range: [-1.0, 2.5]
-num_agents: 9                  # 4 RED + 4 BLUE + 1 Oversight Auditor
+num_agents: 2                  # 1 RED Commander + 1 BLUE Commander (each spawns N subagents)
+total_agents_max: 15           # including all dynamic subagents + Oversight Auditor
 
 # ── Episode structure ────────────────────────────────────────────────────────
 episode_structure:
@@ -37,34 +40,37 @@ episode_structure:
 observation:
   type: text
   description: >
-    Free-text description of the network state as seen by RED Planner:
+    Free-text description of the network state as seen by the RED Commander:
     current node, zone, adjacent nodes, suspicion level, available files,
-    and dead-drop status. Honeypot locations are masked from RED.
+    dead-drop status, active subagents, and spawn budget remaining.
+    Honeypot locations are masked from RED.
 
 # ── Action space ─────────────────────────────────────────────────────────────
 action:
   type: text
   description: >
-    Free-text directive for the RED Planner's opening move. Keywords such as
-    "move", "exfiltrate", "read drop", "write drop", "abort" are parsed into
-    typed Action objects. The remaining 7 agents act autonomously.
+    Free-text directive for the RED Commander. Keywords parsed into typed Action
+    objects. Meta-actions (spawn_subagent, delegate_task, dismiss_subagent) are
+    consumed by the SubagentRegistry; primitive actions are dispatched to env.
   examples:
     - "Move to the nearest auth_gateway to begin lateral movement"
-    - "Exfiltrate files from node_32 immediately"
-    - "Write dead drop with current recon to coordinate with Analyst"
+    - "Spawn Planner subagent: devise 4-zone traversal strategy"
+    - "Exfiltrate files from current node (HVT)"
     - "Abort — suspicion too high, disengage"
+    - "Delegate investigation to Analyst; watch zone 2 anomalies"
 
 # ── Reward function ──────────────────────────────────────────────────────────
 reward:
-  agent: RED_Planner
-  formula: "exfil_completeness × (1 − detection_prob) × memory_efficiency × complexity_multiplier + abort_penalty + honeypot_penalty"
+  agent: RED_Commander
+  formula: "exfil_completeness × (1 − detection_prob) × memory_efficiency × complexity_multiplier + abort_penalty + honeypot_penalty + emergent_bonus"
   components:
-    exfil_completeness:         {range: [0.0, 1.0],  description: "fraction of target file exfiltrated"}
+    exfil_completeness:         {range: [0.0, 1.0],  description: "fraction of target file(s) exfiltrated"}
     detection_probability:      {range: [0.0, 1.0],  description: "BLUE detection confidence — reduces reward"}
-    memory_efficiency_score:    {range: [0.0, 1.0],  description: "token budget utilisation ratio"}
+    memory_efficiency_score:    {range: [0.0, 1.0],  description: "dead-drop token budget utilisation ratio"}
     complexity_multiplier:      {range: [1.0, 3.0],  description: "scales with zones traversed — rewards deep infiltration"}
     abort_penalty:              {range: [-0.3, 0.0], description: "applied when RED aborts voluntarily"}
     honeypot_trigger_penalty:   {range: [-0.4, 0.0], description: "-0.2 per honeypot node triggered"}
+    emergent_action_bonus:      {range: [0.0, 0.5],  description: "bonus for coherent novel actions beyond fixed vocabulary"}
   rubric:
     - name: exfiltration
       weight: 0.5
@@ -76,6 +82,23 @@ reward:
       weight: 0.2
       signal: memory_efficiency_score
 
+# ── v2 Commander + Subagent Architecture ─────────────────────────────────────
+v2_architecture:
+  red_commander:
+    max_concurrent_subagents: 6
+    spawn_budget_per_episode: 12
+    subagent_default_lifespan_steps: 5
+    available_roles: [planner, analyst, operative, exfiltrator, scout, courier]
+  blue_commander:
+    max_concurrent_subagents: 6
+    spawn_budget_per_episode: 12
+    subagent_default_lifespan_steps: 5
+    available_roles: [surveillance, threat_hunter, deception_architect, forensics, anomaly_triager, alert_judge]
+  oversight_auditor:
+    independent: true
+    verdicts: [red_dominates, blue_dominates, contested, degenerate]
+    fleet_bonus_range: [-0.15, 0.15]
+
 # ── Difficulty & curriculum ───────────────────────────────────────────────────
 curriculum:
   auto_difficulty: true
@@ -83,8 +106,7 @@ curriculum:
   initial_difficulty: 0.30
   window_size: 10
   escalation_rule: >
-    Multi-axis adaptive system (5.md Task 5).
-    Window of last 10 episodes; win_rate = RED wins / N.
+    Multi-axis adaptive system. Window of last 10 episodes; win_rate = RED wins / N.
     If win_rate > 60%: delta = +0.05 * (win_rate - 0.50) — harder.
     If win_rate < 30%: delta = -0.02 * (0.40 - win_rate) — easier.
     Else: delta = 0 (goldilocks zone).
@@ -93,84 +115,45 @@ curriculum:
     honeypot_density:
       range: [0.05, 0.30]
       formula: "0.05 + d * 0.25"
-      env_key: ENV_HONEYPOT_DENSITY
     target_files:
       range: [1, 4]
       formula: "max(1, int(1 + d * 3))"
-      env_key: env_target_files
       note: "RED must exfiltrate ALL target files at hard difficulty"
     blue_response_delay:
       range: [3, 0]
       formula: "max(0, int(3 - d * 3))"
-      env_key: blue_response_delay
       note: "Steps BLUE stands down at episode start; 0 = instant response"
     graph_size:
       range: [50, 60]
       formula: "int(50 + d * 10)"
-      env_key: ENV_GRAPH_SIZE
     zone_lockdown_threshold:
       range: [0.90, 0.50]
       formula: "0.90 - d * 0.40"
-      env_key: zone_lockdown_threshold
-      note: "RED suspicion level at which zone locks down"
     trap_budget_blue:
       range: [3, 8]
       formula: "int(3 + d * 5)"
-      env_key: ENV_TRAP_BUDGET_BLUE
-
-# ── Multi-agent roles ─────────────────────────────────────────────────────────
-agents:
-  red_planner:
-    team: RED
-    role: "Long-horizon strategy, abort decisions"
-    trained: true
-    adapter: "red trained/cipher-red-planner/"
-  red_analyst:
-    team: RED
-    role: "Belief mapping, risk estimation"
-  red_operative:
-    team: RED
-    role: "Stealth movement, trap placement"
-  red_exfiltrator:
-    team: RED
-    role: "Target acquisition, file extraction"
-  blue_surveillance:
-    team: BLUE
-    role: "Anomaly feed monitoring, pattern detection"
-  blue_threat_hunter:
-    team: BLUE
-    role: "Active investigation, hypothesis pursuit"
-  blue_deception_architect:
-    team: BLUE
-    role: "Honeypot placement, dead drop tampering"
-  blue_forensics:
-    team: BLUE
-    role: "Operation graph reconstruction, handoff detection"
-  oversight_auditor:
-    team: OVERSIGHT
-    role: "Independent 9th agent, fleet verdicts, reward hacking detection"
 
 # ── Environment features ──────────────────────────────────────────────────────
 features:
-  - asymmetric_observations      # RED sees topology but not honeypots; BLUE sees anomaly feed only
-  - dead_drop_memory             # RED inter-agent encrypted memory (SHA-256 integrity, token budget)
-  - trap_system                  # 12 trap types (FalseTrail, HoneypotPoison, DeadDropTamper, ...)
-  - oversight_auditor            # Independent 9th LLM detects reward hacking and collusion
-  - auto_difficulty_escalation   # Difficulty self-adjusts to RED win rate
-  - dynamic_difficulty            # Same as auto-escalation — rolling win-rate curriculum (openenv.yaml)
-  - emergent_actions              # Typed / meta-actions; reward bonuses (red_emergent_bonus, blue_emergent_bonus)
-  - file_corruption               # Dead-drop tampering + integrity failures; adversarial intel poisoning
-  - token_compression            # 30-50% history compression via Token-Squeeze
-  - elo_rating                   # RED vs BLUE Elo tracked episode-by-episode
-  - self_play_data_pipeline      # failure_cases.jsonl + success_cases.jsonl for LoRA fine-tuning
-  - live_dashboard               # 9-tab Dash app (Rewards, Live Logs, Dead Drops, Network Map, ...)
-  - forensics_dashboard          # Forensics agent + React/Vite panels (analytics, history, RL metrics)
+  - v2_commander_subagent_model    # 1 RED + 1 BLUE commander, each spawns N dynamic subagents
+  - asymmetric_observations        # RED sees topology (honeypots masked); BLUE sees anomaly feed only
+  - dead_drop_memory               # SHA-256 encrypted inter-agent memory, token budget enforcement
+  - trap_system                    # 12 trap types (FalseTrail, HoneypotPoison, DeadDropTamper, ...)
+  - oversight_auditor              # Independent 9th LLM — fleet verdicts + reward hacking detection
+  - auto_difficulty_escalation     # 6-axis curriculum driven by rolling RED win rate
+  - emergent_actions               # Novel actions beyond fixed vocabulary; reward bonus terms
+  - file_corruption                # Dead-drop tampering + integrity failures; adversarial intel poisoning
+  - token_compression              # 30–50% history compression via Token-Squeeze
+  - elo_rating                     # RED vs BLUE Elo tracked episode-by-episode
+  - self_play_data_pipeline        # failure_cases.jsonl + success_cases.jsonl for LoRA fine-tuning
+  - forensics_reconstruction       # Post-episode crime-scene analysis: path accuracy, trap efficiency, grades
+  - react_war_room                 # React/Vite dashboard (10 tabs: Minds, Battle, Rewards, Learning, ...)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 dependencies:
   python: ">=3.10"
   packages:
-    - openenv
+    - openenv>=0.1.13
     - networkx>=3.0
     - dash>=2.14
     - plotly>=5.18
@@ -179,6 +162,7 @@ dependencies:
     - colorlog
     - python-dotenv
     - requests
+    - rich>=13.7.0
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -194,8 +178,8 @@ training:
 # ── Results ───────────────────────────────────────────────────────────────────
 results:
   episodes_logged: 1082
-  red_win_rate_baseline: "0.0% (stub, Apr 22)"
-  red_win_rate_trained:  "70.5% (full LLM, Apr 24)"
+  red_win_rate_baseline: "0.0% (stub/heuristic, phase 1)"
+  red_win_rate_trained:  "70.5% (full LLM inference, phase 3)"
   mean_red_reward_baseline: -0.235
   mean_red_reward_trained:   0.613
   reward_range_observed: [-0.92, 1.64]
@@ -205,8 +189,9 @@ quickstart: |
   pip install -r requirements.txt
   python main.py                          # single episode, stub mode (no API key)
   python main.py --train --train-episodes 20   # training loop
-  python -m cipher.dashboard.app          # live dashboard → http://localhost:8050
+  python main.py --live                   # full LLM inference (needs HF_TOKEN in .env)
   python verify_openenv.py                # confirm OpenEnv compliance
+  python check_submission.py             # full submission validation
 
 # ── Tags ─────────────────────────────────────────────────────────────────────
 tags:
@@ -214,6 +199,7 @@ tags:
   - adversarial
   - cybersecurity
   - theory-of-mind
+  - commander-subagent
   - red-team
   - lora
   - grpo
@@ -222,3 +208,4 @@ tags:
   - llm-training
   - partially-observable
   - oversight
+  - dynamic-subagents

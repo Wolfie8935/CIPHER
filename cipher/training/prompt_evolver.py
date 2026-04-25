@@ -181,6 +181,18 @@ class PromptEvolver:
             return pd.DataFrame()
         try:
             df = pd.read_csv(csv_path)
+            for col in (
+                "red_total", "blue_total", "red_exfil", "red_stealth",
+                "red_complexity", "red_abort_penalty", "red_honeypot_penalty",
+                "blue_detection", "blue_speed", "blue_fp_penalty",
+                "blue_honeypot_rate", "blue_graph_reconstruction",
+                "red_complexity_multiplier", "red_unique_nodes",
+                "red_drops_written", "red_traps_placed", "red_context_resets",
+                "oversight_red_adj", "oversight_blue_adj",
+                "red_emergent_bonus", "blue_emergent_bonus",
+            ):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
             return df.tail(n).reset_index(drop=True)
         except Exception:
             return pd.DataFrame()

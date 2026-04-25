@@ -680,6 +680,35 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
     console.print()
 
 
+def _print_forensics_summary(result: dict) -> None:
+    """Print compact forensics reconstruction after each episode."""
+    recon_dict = result.get("forensics_reconstruction")
+    if not recon_dict:
+        return
+    grade = recon_dict.get("investigation_grade", "?")
+    acc = recon_dict.get("path_accuracy", 0.0)
+    actual = recon_dict.get("actual_red_path", [])
+    identified = recon_dict.get("correctly_identified_nodes", [])
+    missed = recon_dict.get("missed_nodes", [])
+    fp = recon_dict.get("false_positive_nodes", [])
+    trap_eff = recon_dict.get("trap_efficiency", 0.0)
+    grade_color = {"A": "green", "B": "cyan", "C": "yellow", "D": "orange3", "F": "red"}.get(grade, "white")
+    console.print(f"  [bold white]── FORENSICS RECONSTRUCTION ──[/bold white]")
+    console.print(
+        f"  Investigation Grade: [{grade_color}]{grade}[/{grade_color}]  "
+        f"(accuracy: [cyan]{acc:.0%}[/cyan])"
+    )
+    console.print(
+        f"  RED path: [dim]{len(actual)} nodes[/dim]  →  "
+        f"BLUE identified [green]{len(identified)}[/green], "
+        f"missed [red]{len(missed)}[/red]"
+    )
+    console.print(
+        f"  Traps: [cyan]{trap_eff:.0%} efficiency[/cyan]  │  "
+        f"False positives: [yellow]{len(fp)}[/yellow] node(s) investigated but RED never visited"
+    )
+    console.print()
+
 
 _STATE_FILE = Path("training_state.json")
 _LIVE_STEPS_FILE = Path("live_steps.jsonl")
@@ -1026,6 +1055,7 @@ def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
 
         if isinstance(result, dict):
             _print_episode_battle(result, ep_num, mode=mode)
+            _print_forensics_summary(result)
 
             # Narrative report
             try:
@@ -1351,6 +1381,7 @@ def main() -> None:
 
         if isinstance(result, dict):
             _print_episode_battle(result, ep_num, mode=mode)
+            _print_forensics_summary(result)
 
             # ── Feed result back into difficulty controller ────────────────
             try:

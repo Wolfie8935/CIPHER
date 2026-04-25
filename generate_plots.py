@@ -512,86 +512,209 @@ def plot_win_rate_progression():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. ARCHITECTURE SUMMARY CARD — visual overview
+# 7. ARCHITECTURE SUMMARY CARD — v2 Commander + Subagent Model
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_architecture_card():
-    fig, ax = plt.subplots(figsize=(14, 7))
-    ax.set_xlim(0, 14)
-    ax.set_ylim(0, 7)
+    fig, ax = plt.subplots(figsize=(16, 8))
+    ax.set_xlim(0, 16)
+    ax.set_ylim(0, 8)
     ax.axis("off")
-    fig.suptitle("CIPHER — Multi-Agent Architecture Overview",
-                 fontsize=14, fontweight="bold", color=WHITE, y=0.97)
+    fig.suptitle("CIPHER v2 — Commander + Dynamic Subagent Architecture",
+                 fontsize=14, fontweight="bold", color=WHITE, y=0.98)
 
-    def box(cx, cy, w, h, color, label, sublabel="", fontsize=9):
+    def fbox(cx, cy, w, h, color, label, sublabel="", fs=9):
         rect = mpatches.FancyBboxPatch(
             (cx - w/2, cy - h/2), w, h,
-            boxstyle="round,pad=0.05",
-            facecolor=color + "33",
-            edgecolor=color,
-            linewidth=1.5,
+            boxstyle="round,pad=0.06",
+            facecolor=color + "28", edgecolor=color, linewidth=1.8,
         )
         ax.add_patch(rect)
-        ax.text(cx, cy + (h*0.15 if sublabel else 0), label,
-                ha="center", va="center", fontsize=fontsize,
-                color=WHITE, fontweight="bold")
+        ax.text(cx, cy + (h * 0.15 if sublabel else 0), label,
+                ha="center", va="center", fontsize=fs, color=WHITE, fontweight="bold")
         if sublabel:
-            ax.text(cx, cy - h*0.25, sublabel,
-                    ha="center", va="center", fontsize=7,
-                    color=MUTED)
+            ax.text(cx, cy - h * 0.22, sublabel,
+                    ha="center", va="center", fontsize=6.5, color=MUTED)
 
-    def arrow(x1, y1, x2, y2, color=MUTED, label=""):
+    def arr(x1, y1, x2, y2, col=MUTED, lbl="", ls="-|>"):
         ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.2,
-                                   mutation_scale=12))
-        if label:
-            mx, my = (x1+x2)/2, (y1+y2)/2
-            ax.text(mx, my + 0.13, label, ha="center", fontsize=6.5, color=color)
+                    arrowprops=dict(arrowstyle=ls, color=col, lw=1.3, mutation_scale=11))
+        if lbl:
+            ax.text((x1+x2)/2, (y1+y2)/2 + 0.12, lbl, ha="center", fontsize=6.5, color=col)
 
-    # RED Team
-    box(2.0, 5.5, 1.6, 0.55, RED_C, "Planner", "long-horizon strategy")
-    box(2.0, 4.7, 1.6, 0.55, RED_C, "Analyst",  "belief map · risk")
-    box(2.0, 3.9, 1.6, 0.55, RED_C, "Operative", "stealth · traps")
-    box(2.0, 3.1, 1.6, 0.55, RED_C, "Exfiltrator", "file extraction")
-    ax.text(2.0, 6.3, "RED TEAM", ha="center", fontsize=11, color=RED_C, fontweight="bold")
+    # ── Oversight (top center) ────────────────────────────────────────────────
+    PURP = "#dd44ff"
+    fbox(8.0, 7.3, 3.0, 0.65, PURP, "Oversight Auditor", "9th independent LLM · fleet verdicts · reward-hacking detection", fs=9)
 
-    # BLUE Team
-    box(12.0, 5.5, 1.6, 0.55, BLUE_C, "Surveillance", "anomaly feed")
-    box(12.0, 4.7, 1.6, 0.55, BLUE_C, "Threat Hunter", "active investigation")
-    box(12.0, 3.9, 1.6, 0.55, BLUE_C, "Deception Arch.", "honeypots · drops")
-    box(12.0, 3.1, 1.6, 0.55, BLUE_C, "Forensics", "op-graph reconstruction")
-    ax.text(12.0, 6.3, "BLUE TEAM", ha="center", fontsize=11, color=BLUE_C, fontweight="bold")
+    # ── RED Commander (left) ──────────────────────────────────────────────────
+    fbox(2.4, 6.0, 2.8, 0.75, RED_C, "RED Commander", "commander.py · Llama-3.1-8B", fs=10)
 
-    # Environment
-    box(7.0, 4.5, 2.4, 1.3, YELLOW_C, "50-Node Network", "4 security zones\nasymmetric observations")
+    # RED subagents
+    subs_red = [("Planner", "long-horizon strategy"), ("Analyst", "belief map · risk"),
+                ("Operative", "stealth · traps"), ("Exfiltrator", "file extraction")]
+    for i, (name, sub) in enumerate(subs_red):
+        fbox(2.4, 4.8 - i * 0.85, 2.4, 0.65, RED_C, name, sub, fs=8)
 
-    # Dead Drops
-    box(7.0, 2.4, 1.8, 0.65, ORANGE_C, "Dead Drop Vault", "RED inter-agent memory")
+    ax.text(1.0, 6.5, "spawn ↓", ha="center", fontsize=8, color=RED_C, style="italic")
+    ax.add_patch(mpatches.FancyBboxPatch((0.9, 3.55), 2.9, 1.55,
+        boxstyle="round,pad=0.06", facecolor="#33000a", edgecolor=RED_C+"66", linewidth=1, linestyle="--"))
+    ax.text(1.0, 5.1, "dynamic\nsubagents", ha="left", fontsize=7, color=RED_C + "aa")
 
-    # Oversight
-    box(7.0, 6.2, 2.0, 0.65, "#ff00ff", "Oversight Auditor", "9th LLM · fleet verdicts")
+    # ── BLUE Commander (right) ────────────────────────────────────────────────
+    fbox(13.6, 6.0, 2.8, 0.75, BLUE_C, "BLUE Commander", "commander.py · Llama-3.1-8B", fs=10)
 
-    # Rewards
-    box(4.5, 1.2, 1.8, 0.65, GREEN_C, "RED Reward", "exfil×stealth×memory×complexity")
-    box(9.5, 1.2, 1.8, 0.65, GREEN_C, "BLUE Reward", "detect×speed×honeypot-FP")
+    subs_blue = [("Surveillance", "anomaly feed"), ("Threat Hunter", "active investigation"),
+                 ("Deception Arch.", "honeypots · drops"), ("Forensics", "path reconstruction")]
+    for i, (name, sub) in enumerate(subs_blue):
+        fbox(13.6, 4.8 - i * 0.85, 2.4, 0.65, BLUE_C, name, sub, fs=8)
 
-    # Dashboard
-    box(7.0, 0.45, 3.2, 0.55, MUTED, "Live Dashboard + Analytics", "9 tabs · Elo · Heatmap · Telemetry")
+    ax.text(15.0, 6.5, "spawn ↓", ha="center", fontsize=8, color=BLUE_C, style="italic")
+    ax.add_patch(mpatches.FancyBboxPatch((12.2, 3.55), 2.9, 1.55,
+        boxstyle="round,pad=0.06", facecolor="#00001a", edgecolor=BLUE_C+"66", linewidth=1, linestyle="--"))
+    ax.text(12.3, 5.1, "dynamic\nsubagents", ha="left", fontsize=7, color=BLUE_C + "aa")
 
-    # Arrows
-    arrow(2.9, 4.5, 5.7, 4.5, RED_C, "actions")
-    arrow(8.3, 4.5, 11.1, 4.5, BLUE_C, "actions")
-    arrow(5.7, 4.2, 3.0, 4.2, RED_C, "obs (masked)")
-    arrow(8.3, 4.2, 11.0, 4.2, BLUE_C, "obs (noisy)")
-    arrow(6.5, 3.9, 6.3, 2.7, ORANGE_C, "write drops")
-    arrow(7.7, 2.7, 7.5, 3.9, ORANGE_C, "tamper")
-    arrow(5.5, 3.9, 4.7, 1.55, GREEN_C, "reward")
-    arrow(8.5, 3.9, 9.3, 1.55, GREEN_C, "reward")
-    arrow(7.0, 5.75, 7.0, 5.85, "#ff00ff", "")
-    arrow(5.5, 0.9, 6.35, 0.65, MUTED, "")
-    arrow(8.5, 0.9, 7.65, 0.65, MUTED, "")
+    # ── Episode Runner (center) ───────────────────────────────────────────────
+    fbox(8.0, 5.1, 2.8, 1.4, YELLOW_C, "Episode Runner", "_episode_runner.py\nEpisodeState · ScenarioGenerator\n50-node network · 4 zones", fs=9)
+
+    # Dead Drop Vault
+    fbox(8.0, 3.0, 2.4, 0.7, ORANGE_C, "Dead Drop Vault", "SHA-256 memory · token budgets · tamper detection")
+
+    # Reward functions
+    fbox(5.2, 1.5, 2.6, 0.75, GREEN_C, "RED Reward", "exfil × stealth × memory × complexity + emergent_bonus", fs=8)
+    fbox(10.8, 1.5, 2.6, 0.75, GREEN_C, "BLUE Reward", "detection × speed × honeypot_rate − FP + forensics_score", fs=8)
+
+    # Forensics
+    fbox(8.0, 1.5, 2.2, 0.7, "#ff8844", "Forensics Recon", "grade A–F · path accuracy · trap efficiency")
+
+    # Data / Dashboard row
+    fbox(8.0, 0.45, 7.0, 0.55, MUTED, "rewards_log.csv · live_steps.jsonl · episode_traces/ → React War Room (10 tabs)", fs=8)
+
+    # ── Arrows ────────────────────────────────────────────────────────────────
+    arr(3.8, 5.8, 6.6, 5.2, RED_C, "actions")          # RED → env
+    arr(6.6, 4.8, 3.8, 5.5, RED_C, "obs (masked)")     # env → RED
+    arr(12.2, 5.8, 9.4, 5.2, BLUE_C, "actions")         # BLUE → env
+    arr(9.4, 4.8, 12.2, 5.5, BLUE_C, "obs (noisy feed)") # env → BLUE
+    arr(7.2, 4.4, 7.4, 3.35, ORANGE_C, "write")
+    arr(8.8, 3.35, 8.6, 4.4, ORANGE_C, "tamper")
+    arr(6.6, 4.4, 5.6, 1.88, GREEN_C, "reward")
+    arr(9.4, 4.4, 10.4, 1.88, GREEN_C, "reward")
+    arr(8.0, 4.4, 8.0, 1.88, "#ff8844", "forensics")
+    arr(8.0, 6.92, 8.0, 6.73, PURP)                    # oversight → env
+    arr(5.6, 1.12, 6.5, 0.65, MUTED)
+    arr(10.4, 1.12, 9.5, 0.65, MUTED)
+    arr(8.0, 1.12, 8.0, 0.73, MUTED)
+
+    # ── Legend ────────────────────────────────────────────────────────────────
+    legend_items = [
+        (RED_C, "RED team (attacker)"), (BLUE_C, "BLUE team (defender)"),
+        (PURP, "Oversight Auditor"), (ORANGE_C, "Dead Drop memory"),
+        (GREEN_C, "Reward signals"), ("#ff8844", "Forensics"),
+    ]
+    for i, (col, lbl) in enumerate(legend_items):
+        ax.add_patch(mpatches.Rectangle((0.3 + i * 2.55, 0.05), 0.22, 0.22, color=col))
+        ax.text(0.58 + i * 2.55, 0.16, lbl, fontsize=7, color=MUTED, va="center")
 
     fig.tight_layout()
     _save(fig, "architecture_card")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7b. ARCHITECTURE V2 ANNOTATED — for React dashboard import
+# ─────────────────────────────────────────────────────────────────────────────
+def plot_architecture_v2_annotated():
+    """Regenerate assets/architecture_v2_annotated.png used by ArchitecturePanel.jsx."""
+    fig, axes = plt.subplots(1, 2, figsize=(18, 8), gridspec_kw={"width_ratios": [2, 1]})
+    fig.suptitle("CIPHER v2 — Commander + Dynamic Subagent Architecture",
+                 fontsize=13, fontweight="bold", color=WHITE, y=0.98)
+
+    ax = axes[0]
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 8)
+    ax.axis("off")
+
+    PURP = "#dd44ff"
+
+    def fbox(cx, cy, w, h, color, label, sublabel="", fs=8.5):
+        rect = mpatches.FancyBboxPatch(
+            (cx - w/2, cy - h/2), w, h,
+            boxstyle="round,pad=0.06",
+            facecolor=color + "28", edgecolor=color, linewidth=1.8,
+        )
+        ax.add_patch(rect)
+        ax.text(cx, cy + (h * 0.15 if sublabel else 0), label,
+                ha="center", va="center", fontsize=fs, color=WHITE, fontweight="bold")
+        if sublabel:
+            ax.text(cx, cy - h * 0.22, sublabel, ha="center", va="center", fontsize=6, color=MUTED)
+
+    def arr(x1, y1, x2, y2, col=MUTED, lbl=""):
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="-|>", color=col, lw=1.2, mutation_scale=10))
+        if lbl:
+            ax.text((x1+x2)/2, (y1+y2)/2 + 0.1, lbl, ha="center", fontsize=6, color=col)
+
+    fbox(5.0, 7.5, 3.5, 0.7, PURP, "Oversight Auditor", "independent 9th LLM · fleet verdicts", fs=9)
+    fbox(1.5, 5.8, 2.4, 0.8, RED_C, "RED Commander", "1 brain · Llama-3.1-8B", fs=9)
+    fbox(8.5, 5.8, 2.4, 0.8, BLUE_C, "BLUE Commander", "1 brain · Llama-3.1-8B", fs=9)
+
+    for i, (n, s) in enumerate([("Planner", "strategy"), ("Analyst", "belief map"),
+                                  ("Operative", "stealth"), ("Exfiltrator", "exfil")]):
+        fbox(1.5, 4.4 - i * 0.78, 2.0, 0.6, RED_C, n, s, fs=7.5)
+    ax.add_patch(mpatches.FancyBboxPatch((0.2, 2.0), 2.6, 2.65,
+        boxstyle="round,pad=0.05", facecolor="#18000a", edgecolor=RED_C+"55", linewidth=1, linestyle="--"))
+    ax.text(0.35, 4.7, "↓ spawned\non demand", ha="left", fontsize=7, color=RED_C+"aa")
+
+    for i, (n, s) in enumerate([("Surveillance", "anomaly"), ("Threat Hunter", "active"),
+                                  ("Deception Arch.", "honeypots"), ("Forensics", "path recon")]):
+        fbox(8.5, 4.4 - i * 0.78, 2.0, 0.6, BLUE_C, n, s, fs=7.5)
+    ax.add_patch(mpatches.FancyBboxPatch((7.2, 2.0), 2.6, 2.65,
+        boxstyle="round,pad=0.05", facecolor="#00001a", edgecolor=BLUE_C+"55", linewidth=1, linestyle="--"))
+    ax.text(7.35, 4.7, "↓ spawned\non demand", ha="left", fontsize=7, color=BLUE_C+"aa")
+
+    fbox(5.0, 4.5, 3.0, 1.3, YELLOW_C, "Episode Runner", "EpisodeState\n50 nodes · 4 zones", fs=8.5)
+    fbox(5.0, 2.6, 2.2, 0.65, ORANGE_C, "Dead Drop Vault", "SHA-256 memory", fs=8)
+    fbox(2.8, 1.2, 1.9, 0.6, GREEN_C, "RED Reward", "exfil×stealth×cmplx", fs=7.5)
+    fbox(7.2, 1.2, 1.9, 0.6, GREEN_C, "BLUE Reward", "detect×speed×hp−FP", fs=7.5)
+    fbox(5.0, 0.4, 4.5, 0.5, MUTED, "rewards_log.csv · live_steps.jsonl → React War Room", fs=7.5)
+
+    arr(2.7, 5.5, 3.4, 4.8, RED_C, "actions")
+    arr(3.4, 4.2, 2.7, 5.2, RED_C, "obs")
+    arr(7.3, 5.5, 6.6, 4.8, BLUE_C, "actions")
+    arr(6.6, 4.2, 7.3, 5.2, BLUE_C, "obs")
+    arr(4.5, 3.85, 4.7, 2.93, ORANGE_C)
+    arr(5.5, 2.93, 5.3, 3.85, ORANGE_C)
+    arr(5.0, 7.15, 5.0, 6.95, PURP)
+    arr(3.5, 3.85, 3.0, 1.5, GREEN_C)
+    arr(6.5, 3.85, 7.0, 1.5, GREEN_C)
+    arr(5.0, 1.65, 5.0, 0.65, MUTED)
+
+    # Right panel: key stats table
+    ax2 = axes[1]
+    ax2.set_xlim(0, 5)
+    ax2.set_ylim(0, 8)
+    ax2.axis("off")
+    ax2.text(2.5, 7.6, "Key Metrics", ha="center", fontsize=12, color=WHITE, fontweight="bold")
+
+    stats = [
+        ("Episodes logged", "1,082"),
+        ("RED win rate (stub baseline)", "~0%"),
+        ("RED win rate (LLM trained)", "70.5%"),
+        ("Mean RED reward (baseline)", "−0.235"),
+        ("Mean RED reward (trained)", "+0.613"),
+        ("Max subagents / episode", "12 RED + 12 BLUE"),
+        ("Trap types", "12"),
+        ("Zones", "4 (Perimeter→Critical)"),
+        ("Dead drop integrity", "SHA-256"),
+        ("Oversight verdicts", "4 types"),
+        ("Forensics grades", "A / B / C / D / F"),
+        ("Dashboard tabs", "10 tabs"),
+    ]
+    for i, (k, v) in enumerate(stats):
+        y = 7.1 - i * 0.55
+        ax2.text(0.1, y, k, fontsize=8.5, color=MUTED, va="center")
+        ax2.text(4.9, y, v, fontsize=8.5, color=WHITE, va="center", ha="right", fontweight="bold")
+        ax2.axhline(y - 0.22, color=GRID, linewidth=0.5, xmin=0.02, xmax=0.98)
+
+    fig.tight_layout()
+    _save(fig, "architecture_v2_annotated")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -606,6 +729,7 @@ if __name__ == "__main__":
     plot_fleet_verdicts()
     plot_win_rate_progression()
     plot_architecture_card()
+    plot_architecture_v2_annotated()
     n = len([f for f in os.listdir("plots") if f.endswith(".png")])
     print(f"\nDone -- {n} plots saved to plots/")
     print("Embed in README: ![Name](plots/<name>.png)")

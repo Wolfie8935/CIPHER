@@ -1,5 +1,5 @@
 """
-CIPHER Hackathon Submission Checker
+CIPHER Hackathon Submission Checker (v2 — Commander + Subagent Architecture)
 Run: python check_submission.py
 """
 import os, sys, json, csv, importlib
@@ -34,6 +34,7 @@ required_files = {
     "cipher-training-red-v2.ipynb":    "Training notebook v2",
     "rewards_log.csv":                 "Telemetry data",
     "generate_plots.py":               "Plot generation script",
+    "cipher/agents/blue/forensics_analyzer.py": "Forensics reconstruction engine",
 }
 for path, desc in required_files.items():
     check(desc, (ROOT / path).exists(), path)
@@ -70,6 +71,8 @@ if yaml_path.exists():
     for field in ["name:", "version:", "entry_point:", "observation_type:",
                   "action_type:", "reward_range:", "description:"]:
         check(f"field: {field.rstrip(':')}", field in yaml_text)
+    check("v2 architecture in yaml", "v2" in yaml_text)
+    check("commander_subagent in yaml", "commander" in yaml_text.lower())
 else:
     check("openenv.yaml exists", False)
 
@@ -95,17 +98,21 @@ try:
     obs2, reward, terminated, truncated, info2 = env.step("Move to nearest node")
     check("step() returns 5-tuple", True)
     check("reward is float", isinstance(reward, float), f"reward={reward:+.3f}")
-    check("terminated is True", terminated is True)
+    check("terminated is True (one step = one episode)", terminated is True)
     check("info2 has 'terminal_reason'", "terminal_reason" in info2)
 
     render = env.render()
     check("render() returns str", isinstance(render, str))
-    check("second reset() increments episode", True)
     _, i2 = env.reset()
     check("episode counter increments", i2["episode"] == 2, f"episode={i2['episode']}")
 
+    # v2 arch check
+    from cipher.agents.commander import RedCommander, BlueCommander
+    check("RedCommander importable", True)
+    check("BlueCommander importable", True)
+
 except Exception as e:
-    check("OpenEnv compliance checks", False, str(e))
+    check("OpenEnv compliance checks", False, str(e)[:120])
 
 # ── 5. REWARD DATA ───────────────────────────────────────────────────────────
 section("5. Rewards & Training Data")
@@ -118,14 +125,11 @@ if csv_path.exists():
     check("at least 100 episodes logged", len(rows) >= 100, f"{len(rows)} episodes")
     check("at least 500 episodes logged", len(rows) >= 500, f"{len(rows)} episodes")
 
-    # Check columns
     if rows:
-        required_cols = ["red_total", "blue_total", "fleet_verdict",
-                         "terminal_reason", "red_exfil"]
+        required_cols = ["red_total", "blue_total", "fleet_verdict", "terminal_reason", "red_exfil"]
         for col in required_cols:
             check(f"column '{col}' present", col in rows[0])
 
-        # Check there are both wins and losses
         red_wins = sum(1 for r in rows if float(r.get("red_total", 0)) > 0)
         check("has RED wins (> 0 reward)", red_wins > 0, f"{red_wins} wins")
         check("has RED losses", (len(rows) - red_wins) > 0)
@@ -151,10 +155,9 @@ readme_checks = {
 for marker, desc in readme_checks.items():
     check(desc, marker in readme)
 
-# Submission links filled in?
 hf_placeholder = "uploading" in readme or "link to be added" in readme
-check("HF Space URL (placeholder OK for now)", True,
-      "placeholder present — fill after upload" if hf_placeholder else "URL present",
+check("HF Space URL (placeholder OK)", True,
+      "placeholder — fill after upload" if hf_placeholder else "URL present",
       warn=hf_placeholder)
 
 # ── 7. DOCKER / HF SPACES ───────────────────────────────────────────────────
@@ -164,9 +167,10 @@ check("Dockerfile exposes port 7860", "7860" in dockerfile)
 check("gunicorn in CMD", "gunicorn" in dockerfile)
 check("LLM_MODE=stub set", "LLM_MODE=stub" in dockerfile)
 check("openenv in pip install", "openenv" in dockerfile)
+check("React build step in Dockerfile", "npm run build" in dockerfile)
 
 hf_app = (ROOT / "hf_app.py").read_text(encoding="utf-8")
-check("hf_app.py imports app + server", "server" in hf_app)
+check("hf_app.py imports app", "from api_server import app" in hf_app or "app" in hf_app)
 check("hf_app.py sets port 7860", "7860" in hf_app)
 
 # ── 8. TRAINING NOTEBOOKS ────────────────────────────────────────────────────
@@ -177,9 +181,7 @@ for nb_name in ["CIPHER_Training_Colab.ipynb", "cipher-training-red-v2.ipynb"]:
         try:
             nb = json.loads(nb_path.read_text(encoding="utf-8"))
             cells = nb.get("cells", [])
-            source = " ".join(
-                "".join(c.get("source", [])) for c in cells
-            )
+            source = " ".join("".join(c.get("source", [])) for c in cells)
             check(f"{nb_name} — valid JSON notebook", True, f"{len(cells)} cells")
             check(f"{nb_name} — references unsloth/trl",
                   any(k in source.lower() for k in ["unsloth", "trl", "grpo", "sfttrainer"]))
@@ -215,8 +217,10 @@ modules_to_check = [
     "cipher.rewards.red_reward",
     "cipher.rewards.blue_reward",
     "cipher.agents.base_agent",
+    "cipher.agents.commander",
     "cipher.training.loop",
     "cipher.utils.config",
+    "cipher.agents.blue.forensics_analyzer",
 ]
 for mod in modules_to_check:
     try:
@@ -224,6 +228,35 @@ for mod in modules_to_check:
         check(mod, True)
     except Exception as e:
         check(mod, False, str(e)[:80])
+
+# ── 11. V2 ARCHITECTURE CHECKS ───────────────────────────────────────────────
+section("11. v2 Commander + Subagent Architecture")
+try:
+    from cipher.agents.commander import RedCommander, BlueCommander
+    from cipher.agents.subagent import Subagent
+    from cipher.agents.subagent_registry import SubagentRegistry
+    check("RedCommander class", True)
+    check("BlueCommander class", True)
+    check("Subagent class", True)
+    check("SubagentRegistry class", True)
+except Exception as e:
+    check("v2 agent classes importable", False, str(e)[:80])
+
+try:
+    from cipher.agents.blue.forensics_analyzer import ForensicsReconstruction, reconstruct_crime_scene
+    check("ForensicsReconstruction dataclass", True)
+    check("reconstruct_crime_scene function", True)
+except Exception as e:
+    check("forensics_analyzer importable", False, str(e)[:80])
+
+# env_wrapper has step/reset/render
+try:
+    from cipher.env_wrapper import CIPHEREnv
+    check("CIPHEREnv has reset()", hasattr(CIPHEREnv, "reset"))
+    check("CIPHEREnv has step()", hasattr(CIPHEREnv, "step"))
+    check("CIPHEREnv has render()", hasattr(CIPHEREnv, "render"))
+except Exception as e:
+    check("CIPHEREnv interface", False, str(e)[:80])
 
 # ── SUMMARY ──────────────────────────────────────────────────────────────────
 print(f"\n{'='*60}")

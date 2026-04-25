@@ -10,6 +10,7 @@ import HistoryPanel        from './components/HistoryPanel';
 import AnalyticsPanel      from './components/AnalyticsPanel';
 import LorePanel           from './components/LorePanel';
 import ArchitecturePanel   from './components/ArchitecturePanel';
+import ForensicsPanel      from './components/ForensicsPanel';
 import LiveLogsPanel         from './components/LiveLogsPanel';
 import { useLivePolling }  from './hooks/useLivePolling';
 import { useThoughts }     from './hooks/useThoughts';
@@ -42,6 +43,7 @@ const RIGHT_TABS = [
   { id: 'analytics', label: '⭐ ANALYTICS' },
   { id: 'lore',      label: '📰 LORE' },
   { id: 'architecture', label: '🏛 ARCHITECTURE' },
+  { id: 'forensics', label: '🔍 FORENSICS' },
 ];
 
 const RIGHT_TAB_IDS = new Set(RIGHT_TABS.map((t) => t.id));
@@ -200,6 +202,7 @@ export default function App() {
   const [speed,      setSpeed]        = useState(1);
   const [rightTab,   setRightTab]     = useState('battle');
   const [zoneBreach, setZoneBreach]   = useState(null);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
     if (!RIGHT_TAB_IDS.has(rightTab)) {
@@ -296,8 +299,9 @@ export default function App() {
     replayComplete:     Boolean(isEpisode && replay.isComplete),
     liveTerminalEvidence: Boolean(!isEpisode && (latest?.terminal_reason || latest?.terminalReason || latest?.is_terminal || latest?.terminal || latest?.done || ['terminated','complete','completed','finished','stopped'].includes(String(latest?.status ?? latest?.run_status ?? '').toLowerCase()))),
   };
-  const showWinnerBanner = winnerCard?.status === 'FINAL'
+  const showWinnerBannerBase = winnerCard?.status === 'FINAL'
     && (completionSignals.replayComplete || completionSignals.liveTerminalEvidence);
+  const showWinnerBanner = showWinnerBannerBase && !bannerDismissed;
   const thoughtStreamRed = isEpisode ? [] : visibleRedThoughts;
   const thoughtStreamBlue = isEpisode ? [] : visibleBlueThoughts;
   const agentsSnapshot = !isEpisode && agentStatus && typeof agentStatus === 'object'
@@ -320,6 +324,14 @@ export default function App() {
     : winnerCard?.winner === 'BLUE'
       ? { text: 'BLUE WINS', icon: '🔵', color: '#7eb3ff', bg: 'rgba(8,16,36,0.94)', border: 'rgba(126,179,255,0.52)' }
       : { text: 'DRAW', icon: '⚪', color: '#d6e1f3', bg: 'rgba(18,22,34,0.94)', border: 'rgba(214,225,243,0.40)' };
+
+  // Auto-dismiss winner banner after 5s; reset when episode changes
+  useEffect(() => { setBannerDismissed(false); }, [selectedEpisode]);
+  useEffect(() => {
+    if (!showWinnerBannerBase) return;
+    const t = setTimeout(() => setBannerDismissed(true), 5000);
+    return () => clearTimeout(t);
+  }, [showWinnerBannerBase]);
 
   // Zone breach banner
   useEffect(() => {
@@ -529,6 +541,7 @@ export default function App() {
             winnerCard={winnerCard}
             completionSignals={completionSignals}
             commanderLifecycle={commanderLifecycle}
+            steps={steps}
             rightOffset={14}
           />
         </>
@@ -569,6 +582,7 @@ export default function App() {
                 {rightTab === 'analytics' && <AnalyticsPanel />}
                 {rightTab === 'lore' && <LorePanel />}
                 {rightTab === 'architecture' && <ArchitecturePanel />}
+                {rightTab === 'forensics' && <ForensicsPanel steps={steps} selectedEpisode={selectedEpisode} />}
               </div>
             </div>
           </div>

@@ -21,9 +21,9 @@ CIPHER was built to fill that gap.
 
 CIPHER puts two teams of LLM agents in direct conflict inside a **procedurally generated 50-node enterprise network**:
 
-- **RED Team (4 agents):** Planner, Analyst, Operative, Exfiltrator. Their goal: infiltrate four security zones and exfiltrate a classified file without being detected.
-- **BLUE Team (4 agents):** Surveillance, Threat Hunter, Deception Architect, Forensics. Their goal: detect the intrusion, reconstruct the RED operation graph, and neutralise the threat.
-- **Oversight Auditor (1 agent):** An independent 9th LLM that watches both teams, detects reward hacking and collusion, and issues corrective fleet bonuses.
+- **RED Commander (1 agent + N dynamic subagents):** A single RED brain that dynamically spawns Planner, Analyst, Operative, and Exfiltrator subagents on demand. Goal: infiltrate four security zones and exfiltrate a classified file without being detected.
+- **BLUE Commander (1 agent + N dynamic subagents):** A single BLUE brain that spawns Surveillance, Threat Hunter, Deception Architect, and Forensics subagents when threat signals escalate. Goal: detect the intrusion, reconstruct RED's operation graph, and neutralise the threat.
+- **Oversight Auditor (1 independent LLM):** Watches both teams, detects reward hacking and collusion, and issues corrective fleet bonuses.
 
 What makes this hard is **asymmetric information**:
 - RED sees the network topology but **honeypot locations are hidden**.
@@ -32,14 +32,16 @@ What makes this hard is **asymmetric information**:
 
 Neither team can win through brute force. RED must deceive. BLUE must infer. Both must model what the other team *believes* — not just what it does.
 
-### New features (submission v2)
+### v2 Architecture: Commander + Dynamic Subagent Model
 
 | Feature | What it adds |
 |---------|----------------|
+| **Commander + Subagents** | 1 RED + 1 BLUE Commander each; specialists spawned dynamically on demand. Spawn budget enforced per episode. |
 | **Emergent actions** | Typed actions beyond fixed verbs — bonus terms in RED/BLUE rewards (`red_emergent_bonus`, `blue_emergent_bonus`) reward coherent multi-step patterns. |
 | **File corruption** | Dead-drop and file-integrity mechanics let BLUE poison intel; RED must recover or route around corrupted drops. |
-| **Dynamic difficulty** | `ScenarioGenerator` auto-escalates from rolling RED win rate (see `openenv.yaml` curriculum block). |
-| **Forensics dashboard** | BLUE Forensics + **React dashboard** tabs (Analytics, History, RL metrics) surface op-graph reconstruction and fleet verdicts live. |
+| **Dynamic difficulty** | 6-axis curriculum auto-escalates from rolling RED win rate (see `openenv.yaml` curriculum block). |
+| **Forensics reconstruction** | Post-episode crime scene analysis: path accuracy (Jaccard), investigation grade (A–F), trap efficiency, false positive breakdown. |
+| **React War Room** | 10-tab dashboard (Minds, Battle, Rewards, Learning, Oversight, History, Analytics, Lore, Architecture, Forensics). |
 
 ```
 python main.py          # Watch a full episode — no API key needed, runs in seconds
@@ -121,9 +123,13 @@ An LLM trained on CIPHER learns to reason about **what another agent knows** —
 ```
 cipher/
 ├── agents/
-│   ├── red/        Planner · Analyst · Operative · Exfiltrator
-│   ├── blue/       Surveillance · ThreatHunter · DeceptionArchitect · Forensics
-│   ├── oversight/  OversightAuditor (9th agent — independent)
+│   ├── commander.py   RED Commander + BLUE Commander (v2 — each spawns subagents)
+│   ├── subagent.py    Dynamic specialist agents (spawned on demand by commanders)
+│   ├── subagent_registry.py  Lifecycle management: spawn, delegate, dismiss, expire
+│   ├── red/           Planner · Analyst · Operative · Exfiltrator (spawnable roles)
+│   ├── blue/          Surveillance · ThreatHunter · DeceptionArchitect · Forensics
+│   │   └── forensics_analyzer.py  Post-episode crime scene reconstruction (Task 6)
+│   ├── oversight/     OversightAuditor (independent 9th LLM)
 │   └── base_agent.py  Action types · Token-Squeeze (30-50% compression) · LLM client
 ├── environment/
 │   ├── graph.py    50-node enterprise network, 4 security zones
@@ -334,5 +340,24 @@ See `commands.md` for the full reference.
 | 12 | Episode Replay dashboard | ✅ |
 | 13 | Live Training dashboard (9 tabs) | ✅ |
 | **D** | **Token-Squeeze · Elo analytics · Self-play pipeline · Winning Metrics** | ✅ |
+| **v2** | **Commander + Subagent Model · Forensics Reconstruction · React War Room** | ✅ |
 
 **Tests: 290 passing, 0 failing**
+
+---
+
+## Forensics Reconstruction
+
+After every episode the Forensics agent produces a structured **crime scene reconstruction**:
+
+```
+── FORENSICS RECONSTRUCTION ──
+Investigation Grade: B  (accuracy: 62%)
+RED path: 14 nodes  →  BLUE identified 9, missed 5
+Traps: 3/5 triggered (60% efficiency)  │  False positives: 2 node(s)
+```
+
+- **Path accuracy** — Jaccard similarity between RED's actual traversal and BLUE's suspected path
+- **Investigation grade** — A (≥80%), B (≥60%), C (≥40%), D (≥20%), F (<20%)
+- **Trap efficiency** — fraction of BLUE traps that actually triggered vs. wasted
+- **Columns in `rewards_log.csv`** — `forensics_grade`, `forensics_accuracy`, `forensics_trap_efficiency`, `forensics_missed_nodes`, `forensics_false_positives`
