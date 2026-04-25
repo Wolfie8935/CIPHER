@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "dev:api": "python api_server.py",
     "build": "vite build",
     "preview": "vite preview"
   },

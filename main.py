@@ -244,24 +244,28 @@ def _mini_bar(val: float, width: int = 20) -> str:
 
 
 def _compute_zone_stall(state: Any) -> int:
-    """Count consecutive steps RED has been in the current zone."""
-    current_zone = int(getattr(state, "red_current_zone", 0))
-    path = list(getattr(state, "red_path_history", []))
-    graph = getattr(state, "graph", None)
-    if not path or graph is None:
-        return 0
-    stall = 0
-    for node in reversed(path):
-        try:
-            z_raw = graph.nodes[node].get("zone")
-            z = z_raw.value if hasattr(z_raw, "value") else int(z_raw)
-        except Exception:
-            break
-        if z == current_zone:
-            stall += 1
-        else:
-            break
-    return stall
+    """Count consecutive steps RED has been stuck at the same node.
+
+    Uses movement_history + current step so that WAIT actions (which don't
+    create a movement record) are counted correctly. Moving between different
+    nodes in the same zone does NOT trigger stall — only genuinely staying
+    at the same node does.
+    """
+    current_step = int(getattr(state, "step", 0))
+    current_node = int(getattr(state, "red_current_node", -1))
+    movement_history = list(getattr(state, "red_movement_history", []))
+
+    if not movement_history:
+        return 0  # no moves yet — treat as no stall
+
+    # Find the most recent step where RED arrived at current_node
+    for entry in reversed(movement_history):
+        if int(entry.get("to_node", -1)) == current_node:
+            arrival_step = int(entry.get("step", 0))
+            return max(0, current_step - arrival_step)
+
+    # Never recorded a move TO current_node — it's the spawn node
+    return current_step
 
 
 def _print_live_step(step: int, max_steps: int, red_actions: list,
@@ -453,48 +457,79 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
     console.print(f"[bold white]  ── BATTLE LOG ──[/bold white]")
     console.print()
 
-    # Parse key events from episode log
+    # Parse ALL events from episode log — one line per agent action
     key_events: list[str] = []
     prev_zone = 0
     _exfil_logged: set[str] = set()
+    _step_headers: set[int] = set()
 
-    for entry in episode_log:
+    _ACTION_LABELS = {
+        "move": "MOVE", "exfiltrate": "EXFIL", "exfil_file": "EXFIL FILE",
+        "read_file": "READ FILE", "write_dead_drop": "DEAD DROP", "read_dead_drop": "READ DROP",
+        "tamper_dead_drop": "TAMPER DROP", "plant_false_trail": "FALSE TRAIL",
+        "plant_temporal_decoy": "DECOY", "plant_honeypot_poison": "HP POISON",
+        "abort": "ABORT", "stand_down": "STAND DOWN", "wait": "WAIT",
+        "spawn_subagent": "SPAWN AGENT", "scan_network": "SCAN", "investigate_node": "INVESTIGATE",
+        "place_honeypot": "HONEYPOT", "plant_breadcrumb": "BREADCRUMB",
+        "analyze_anomaly": "ANALYZE", "trigger_alert": "ALERT",
+        "reconstruct_path": "RECONSTRUCT", "trigger_false_escalation": "FALSE ESC",
+    }
+
+    for entry in sorted(episode_log, key=lambda e: (e.get("step", 0), e.get("agent_id", ""))):
         step = entry.get("step", 0)
         agent_id = str(entry.get("agent_id", ""))
         action_type = str(entry.get("action_type", ""))
         payload = entry.get("payload", {}) or {}
         res = entry.get("result", {}) or {}
+        reasoning = str(payload.get("reasoning", "") or "")[:80]
+        success = res.get("success", True)
+        reason = res.get("reason", "")
+        target_node = payload.get("target_node")
+        target_file = payload.get("target_file")
 
-        if action_type == "move" and agent_id.startswith("red_planner"):
-            target = payload.get("target_node")
-            if target is not None and graph is not None:
-                try:
-                    zone_val = graph.nodes[target].get("zone")
-                    if zone_val is not None:
-                        new_zone = zone_val.value if hasattr(zone_val, "value") else int(zone_val)
-                        hostname = graph.nodes[target].get("hostname", f"node_{target}")
-                        zone_name = ZONE_NAMES.get(new_zone, f"Zone {new_zone}")
-                        if new_zone > prev_zone:
-                            key_events.append(
-                                f"  Step {step:02d} | [bold red]RED ADVANCES[/bold red] "
-                                f"Zone {prev_zone}→[bold]{new_zone}[/bold] "
-                                f"([yellow]{zone_name}[/yellow]) via [cyan]{hostname}[/cyan]"
-                            )
-                            prev_zone = new_zone
-                        elif new_zone == 3 and prev_zone == 3:
-                            key_events.append(
-                                f"  Step {step:02d} | [red]RED[/red] moves within "
-                                f"Critical zone via [cyan]{hostname}[/cyan]"
-                            )
-                except Exception:
-                    pass
+        is_red = agent_id.startswith("red_")
+        is_blue = agent_id.startswith("blue_")
+        team_color = "red" if is_red else "blue" if is_blue else "yellow"
+        short_id = agent_id.replace("_01", "").replace("_", " ").upper()
 
-        elif action_type == "exfiltrate":
-            file_name = payload.get("target_file") or res.get("exfiltrated")
+        # Print step divider once per step
+        if step not in _step_headers:
+            _step_headers.add(step)
+            key_events.append(f"  [dim]── Step {step:02d} ──────────────────────────────────────[/dim]")
+
+        action_label = _ACTION_LABELS.get(action_type, action_type.upper().replace("_", " "))
+
+        # Enrich zone-advance moves
+        if action_type == "move" and agent_id.startswith("red_planner") and target_node is not None and graph is not None:
+            try:
+                zone_val = graph.nodes[target_node].get("zone")
+                if zone_val is not None:
+                    new_zone = zone_val.value if hasattr(zone_val, "value") else int(zone_val)
+                    hostname = graph.nodes[target_node].get("hostname", f"node_{target_node}")
+                    zone_name = ZONE_NAMES.get(new_zone, f"Zone {new_zone}")
+                    if new_zone > prev_zone:
+                        key_events.append(
+                            f"  Step {step:02d} | [bold red]RED ADVANCES[/bold red] "
+                            f"Zone {prev_zone}→[bold]{new_zone}[/bold] "
+                            f"([yellow]{zone_name}[/yellow]) via [cyan]{hostname}[/cyan]"
+                        )
+                        prev_zone = new_zone
+                    else:
+                        key_events.append(
+                            f"  Step {step:02d} | [{team_color}]{short_id}[/{team_color}] "
+                            f"[dim]{action_label}[/dim] → n[cyan]{target_node}[/cyan] "
+                            f"([dim]{hostname}[/dim])"
+                            + (f" [dim italic]{reasoning}[/dim italic]" if reasoning else "")
+                        )
+                    continue
+            except Exception:
+                pass
+
+        # Special highlights
+        if action_type == "exfiltrate" or action_type == "exfil_file":
+            file_name = target_file or res.get("exfiltrated")
             if file_name and file_name not in _exfil_logged:
                 _exfil_logged.add(str(file_name))
-                success = res.get("success", False)
-                reason = res.get("reason", "")
                 if success or reason in ("exfil_success", "exfil_complete"):
                     key_events.append(
                         f"  Step {step:02d} | [bold red]EXFILTRATION[/bold red] "
@@ -505,44 +540,56 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
                         f"  Step {step:02d} | [red]EXFIL attempt[/red] "
                         f"[yellow]FAILED[/yellow] ({reason})"
                     )
+            continue
 
-        elif action_type == "trigger_alert" and agent_id.startswith("blue_"):
+        if action_type == "trigger_alert" and is_blue:
             correct = res.get("correct_alert", False)
             near_miss = res.get("near_miss", False)
             if correct:
-                key_events.append(
-                    f"  Step {step:02d} | [bold blue]BLUE ALERT[/bold blue] "
-                    f"[green]CORRECT[/green] — RED agent located and flagged!"
-                )
+                key_events.append(f"  Step {step:02d} | [bold blue]BLUE ALERT[/bold blue] [green]CORRECT[/green] — RED agent located!")
             elif near_miss:
-                key_events.append(
-                    f"  Step {step:02d} | [blue]BLUE alert[/blue] "
-                    f"[cyan]NEAR MISS[/cyan] — 1 hop away from RED!"
-                )
+                key_events.append(f"  Step {step:02d} | [blue]BLUE alert[/blue] [cyan]NEAR MISS[/cyan]")
             else:
-                key_events.append(
-                    f"  Step {step:02d} | [blue]BLUE alert[/blue] "
-                    f"[yellow]false positive[/yellow]"
-                )
+                key_events.append(f"  Step {step:02d} | [blue]BLUE alert[/blue] [yellow]false positive[/yellow]")
+            continue
 
-        elif action_type == "abort" and agent_id.startswith("red_"):
-            if res.get("reason") == "abort_applied":
-                key_events.append(
-                    f"  Step {step:02d} | [bold yellow]RED ABORT[/bold yellow] "
-                    f"— Mission abandoned"
-                )
+        if action_type == "abort" and is_red and reason == "abort_applied":
+            key_events.append(f"  Step {step:02d} | [bold yellow]RED ABORT[/bold yellow] — Mission abandoned")
+            continue
 
-        # Trap events
-        elif action_type in ("place_honeypot", "plant_breadcrumb", "trigger_false_escalation"):
-            if agent_id.startswith("blue_"):
-                node = payload.get("target_node", "?")
-                key_events.append(
-                    f"  Step {step:02d} | [blue]BLUE TRAP[/blue] "
-                    f"[cyan]{action_type}[/cyan] planted at node {node}"
-                )
+        if action_type == "spawn_subagent":
+            spawned = payload.get("subagent_type") or payload.get("task_brief", "")[:40]
+            key_events.append(
+                f"  Step {step:02d} | [{team_color}]{short_id}[/{team_color}] "
+                f"[bold]🤖 SPAWN AGENT[/bold] — [dim]{spawned}[/dim]"
+            )
+            continue
+
+        if action_type in ("place_honeypot", "plant_breadcrumb", "trigger_false_escalation") and is_blue:
+            node = target_node or "?"
+            key_events.append(
+                f"  Step {step:02d} | [blue]BLUE TRAP[/blue] [cyan]{action_label}[/cyan] → n{node}"
+            )
+            continue
+
+        # Generic action line for everything else
+        detail_parts = []
+        if target_node is not None:
+            detail_parts.append(f"→ n[cyan]{target_node}[/cyan]")
+        if target_file:
+            detail_parts.append(f"file:[cyan]{target_file}[/cyan]")
+        if not success and reason:
+            detail_parts.append(f"[dim]({reason})[/dim]")
+        if reasoning and success:
+            detail_parts.append(f"[dim italic]{reasoning}[/dim italic]")
+        detail = " ".join(detail_parts)
+        key_events.append(
+            f"  Step {step:02d} | [{team_color}]{short_id}[/{team_color}] "
+            f"[dim]{action_label}[/dim]{' ' + detail if detail else ''}"
+        )
 
     if key_events:
-        for event in key_events[:25]:
+        for event in key_events[:60]:
             console.print(event)
     else:
         console.print(f"  [dim]Episode completed in {steps_run} steps — no major events[/dim]")
@@ -608,7 +655,7 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
             f"  [blue]BLUE[/blue]  total=[bold]{br.total:+.3f}[/bold]  "
             f"detection={getattr(br,'detection_accuracy_score',0.0):+.3f}  "
             f"honeypot={getattr(br,'honeypot_trigger_rate',0.0):+.3f}  "
-            f"fp_pen={getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
+            f"fp_pen={-getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
             + blue_em_str + blue_inv_str
         )
         if judgment:
@@ -707,6 +754,65 @@ def _get_step_callback_factory(run_id: str):
                 det = round(float(getattr(state, "blue_detection_confidence", 0.0)), 3)
                 exfil = list(getattr(state, "red_exfiltrated_files", []))
                 zone_label = zone_names.get(int(zone) if zone is not None else 0, "Unknown")
+                # Build rich per-agent list for battle log
+                _all_agents = []
+                for a in (red_actions or []) + (blue_actions or []):
+                    if not a:
+                        continue
+                    atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                    team = "red" if str(a.agent_id).startswith("red") else "blue"
+                    _all_agents.append({
+                        "agent_id": a.agent_id,
+                        "team": team,
+                        "action_type": atype,
+                        "target_node": a.target_node,
+                        "target_file": a.target_file,
+                        "reasoning": (a.reasoning or "")[:300],
+                    })
+
+                # Detect key event for this step
+                _key_event = None
+                _prev_exfil = len(exfil) - (1 if red_info and "exfil" in red_info else 0)
+                if red_info and "exfil" in red_info and exfil:
+                    _key_event = f"EXFIL: {exfil[-1]}"
+                elif susp >= 0.80:
+                    _key_event = f"HIGH SUSPICION: {int(susp*100)}%"
+                elif det >= 0.80:
+                    _key_event = f"HIGH DETECTION: {int(det*100)}%"
+
+                # Collect trap events from state episode_log for this step
+                _trap_events = []
+                for entry in getattr(state, "episode_log", []):
+                    if entry.get("step") == step and entry.get("action_type") in (
+                        "place_honeypot", "plant_false_trail", "plant_breadcrumb",
+                        "trigger_false_escalation", "plant_temporal_decoy", "honeypot_triggered",
+                    ):
+                        _trap_events.append({
+                            "action_type": entry.get("action_type"),
+                            "agent_id": entry.get("agent_id", ""),
+                            "node": (entry.get("payload") or {}).get("target_node"),
+                            "team": "red" if str(entry.get("agent_id","")).startswith("red") else "blue",
+                        })
+
+                # Collect dead drop events for this step
+                _drop_events = []
+                for entry in getattr(state, "episode_log", []):
+                    if entry.get("step") == step and entry.get("action_type") in (
+                        "write_dead_drop", "read_dead_drop", "tamper_dead_drop",
+                    ):
+                        payload = entry.get("payload") or {}
+                        _drop_events.append({
+                            "action_type": entry.get("action_type"),
+                            "agent_id": entry.get("agent_id", ""),
+                            "node": payload.get("target_node"),
+                            "content_preview": str(payload.get("content", ""))[:80],
+                        })
+
+                try:
+                    _red_node = int(getattr(state, "red_current_node", 0))
+                except Exception:
+                    _red_node = 0
+
                 step_data = {
                     "run_id": run_id,
                     "episode": ep_num,
@@ -717,10 +823,16 @@ def _get_step_callback_factory(run_id: str):
                     "suspicion": susp,
                     "detection": det,
                     "zone": zone_label,
+                    "zone_num": int(zone) if zone is not None else 0,
+                    "red_node": _red_node,
                     "elapsed": round(elapsed, 1),
                     "exfil_count": len(exfil),
                     "exfil_files": exfil[-3:],
                     "timestamp": datetime.now().isoformat(),
+                    "all_agents": _all_agents,
+                    "trap_events": _trap_events,
+                    "drop_events": _drop_events,
+                    "key_event": _key_event,
                 }
                 _append_live_step(step_data)
 

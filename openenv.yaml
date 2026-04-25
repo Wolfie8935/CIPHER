@@ -128,10 +128,14 @@ features:
   - trap_system                  # 12 trap types (FalseTrail, HoneypotPoison, DeadDropTamper, ...)
   - oversight_auditor            # Independent 9th LLM detects reward hacking and collusion
   - auto_difficulty_escalation   # Difficulty self-adjusts to RED win rate
+  - dynamic_difficulty            # Same as auto-escalation — rolling win-rate curriculum (openenv.yaml)
+  - emergent_actions              # Typed / meta-actions; reward bonuses (red_emergent_bonus, blue_emergent_bonus)
+  - file_corruption               # Dead-drop tampering + integrity failures; adversarial intel poisoning
   - token_compression            # 30-50% history compression via Token-Squeeze
   - elo_rating                   # RED vs BLUE Elo tracked episode-by-episode
   - self_play_data_pipeline      # failure_cases.jsonl + success_cases.jsonl for LoRA fine-tuning
   - live_dashboard               # 9-tab Dash app (Rewards, Live Logs, Dead Drops, Network Map, ...)
+  - forensics_dashboard          # Forensics agent + React/Vite panels (analytics, history, RL metrics)
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 dependencies:

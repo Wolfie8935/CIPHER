@@ -1,31 +1,36 @@
 {
-  "run_id": "live_20260425_212600",
-  "episode": 5,
-  "step": 7,
-  "suspicion": 0.738,
-  "detection": 0.808,
+  "run_id": "live_20260426_003449",
+  "episode": 1,
+  "step": 4,
+  "suspicion": 0.414,
+  "detection": 0.53,
   "zone": "Critical/HVT",
   "agents": {
     "red_commander_01": {
-      "action": "exfiltrate",
-      "node": null,
+      "action": "move",
+      "node": 47,
       "team": "red"
     },
     "blue_commander_01": {
-      "action": "investigate_node",
-      "node": 22,
+      "action": "analyze_anomaly",
+      "node": 35,
       "team": "blue"
     },
     "blue_surveillance_01": {
       "action": "analyze_anomaly",
-      "node": 22,
+      "node": 35,
       "team": "blue"
     },
     "blue_alert_judge_01": {
       "action": "stand_down",
       "node": null,
       "team": "blue"
+    },
+    "blue_threat_hunter_01": {
+      "action": "investigate_node",
+      "node": 35,
+      "team": "blue"
     }
   },
-  "timestamp": "2026-04-25T21:27:15.083895"
+  "timestamp": "2026-04-26T00:35:04.791272"
 }

@@ -91,6 +91,30 @@ export function useEpisodeReplay(filename, speed = 1) {
         const extracted = stepNums.map((stepNum, idx) => {
           const entries = stepGroups[stepNum];
 
+          // Per-agent log lines → same shape as live_steps `all_agents` (drives StatsHUD lifecycle).
+          const all_agents = (entries || []).map((e) => {
+            const pl = e.payload || {};
+            const aid = String(e.agent_id ?? '');
+            return {
+              agent_id:     e.agent_id,
+              team:         aid.startsWith('red_') ? 'red' : 'blue',
+              action_type:  e.action_type,
+              target_node:  pl.target_node ?? null,
+              target_file:  pl.target_file ?? null,
+              reasoning:    typeof pl.reasoning === 'string' ? pl.reasoning.slice(0, 300) : '',
+            };
+          });
+
+          const blueByAction = {};
+          for (const e of entries || []) {
+            if (!e?.agent_id || !String(e.agent_id).startsWith('blue_')) continue;
+            const k = String(e.action_type ?? 'unknown');
+            blueByAction[k] = (blueByAction[k] || 0) + 1;
+          }
+          const blue_actions = Object.keys(blueByAction).length
+            ? Object.entries(blueByAction).map(([k, v]) => `${k}×${v}`).join(' ')
+            : '—';
+
           // Red planner's intended target node — prefer planner subagent,
           // fall back to commander, then any RED entry with a target.
           const plannerEntry =
@@ -108,17 +132,19 @@ export function useEpisodeReplay(filename, speed = 1) {
           const isLast   = idx === stepNums.length - 1;
 
           return {
-            step:        stepNum,
-            max_steps:   totalStepsNum,
-            episode:     episodeNum,
-            red_node:    redNode,
-            red_action:  redNode != null ? `move → n${redNode}` : 'wait',
+            step:         stepNum,
+            max_steps:    totalStepsNum,
+            episode:      episodeNum,
+            red_node:     redNode,
+            red_action:   redNode != null ? `move → n${redNode}` : 'wait',
+            blue_actions,
+            all_agents,
             zone,
-            suspicion:   finalSuspicion * progress,
-            detection:   finalDetection * progress,
-            exfil_count: isLast && terminalReason === 'exfiltration_complete'
+            suspicion:    finalSuspicion * progress,
+            detection:    finalDetection * progress,
+            exfil_count:  isLast && terminalReason === 'exfiltration_complete'
               ? exfilFiles.length : 0,
-            exfil_files: isLast && terminalReason === 'exfiltration_complete'
+            exfil_files:  isLast && terminalReason === 'exfiltration_complete'
               ? exfilFiles : [],
           };
         });

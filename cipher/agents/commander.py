@@ -332,13 +332,13 @@ class RedCommander(BaseCommander):
         return None
 
     def _is_oscillating(self) -> bool:
-        """True if the same node has been visited 3+ times in the last 6 hops."""
-        if len(self._recent_nodes) < 4:
+        """True if the same node has been visited 2+ times in the last 4 hops."""
+        if len(self._recent_nodes) < 3:
             return False
-        recent = list(self._recent_nodes)[-6:]
+        recent = list(self._recent_nodes)[-4:]
         from collections import Counter
         counts = Counter(recent)
-        return any(c >= 3 for c in counts.values())
+        return any(c >= 2 for c in counts.values())
 
     def act_step(self, *, step: int, parallel: bool = False) -> list[Action]:
         actions = super().act_step(step=step, parallel=parallel)
@@ -632,6 +632,36 @@ class BlueCommander(BaseCommander):
             except Exception as exc:
                 logger.debug("BLUE pre-spawn %s failed: %s", role, exc)
 
+        # Escalate to active hunting once confidence or anomaly-zone pressure rises.
+        # This avoids late-game only investigations when RED reaches Zone 3 quickly.
+        obs = self._current_observation
+        if not isinstance(obs, BlueObservation):
+            return
+        if "threat_hunter" in {s.role for s in self.registry.alive()}:
+            return
+        if self.registry.spawn_budget_remaining <= 0 or len(self.registry) >= self.registry.max_concurrent:
+            return
+
+        det = float(getattr(obs, "current_detection_confidence", 0.0))
+        high_zone_pressure = any(
+            int(getattr(a, "zone", 0) or 0) >= 2 for a in (obs.anomaly_feed or [])
+        )
+        if det < 0.28 and not high_zone_pressure:
+            return
+
+        try:
+            spec = self._make_spec(
+                "threat_hunter",
+                task_brief=(
+                    "Auto-spawned escalation: detection or zone pressure is rising. "
+                    "Prioritize investigate_node on the hottest zone-2/zone-3 anomalies."
+                ),
+                lifespan=10,
+            )
+            self.registry.spawn(spec, step=step)
+        except Exception as exc:
+            logger.debug("BLUE pre-spawn threat_hunter failed: %s", exc)
+
     def _stub_act(self) -> Action:
         obs = self._current_observation
 
@@ -704,7 +734,7 @@ class BlueCommander(BaseCommander):
 
             # Proactively place a honeypot in the highest predicted RED zone.
             if (
-                det >= 0.20
+                det >= 0.10
                 and self.registry.spawn_budget_remaining > 0
                 and len(self.registry) < self.registry.max_concurrent
                 and not any(s.role == "deception_architect" for s in self.registry.alive())
@@ -714,14 +744,14 @@ class BlueCommander(BaseCommander):
                     "deception_architect",
                     task_brief=(
                         f"Detection rising. Place honeypots in Zone {target_zone} "
-                        f"and Zone {target_zone + 1} to trap RED's advance."
+                        f"and Zone {target_zone + 1} to trap RED's advance before they arrive."
                     ),
                     lifespan=8,
                 )
                 return Action(
                     agent_id=self.agent_id,
                     action_type=ActionType.SPAWN_SUBAGENT,
-                    reasoning=f"Detection {det:.0%} — deploying deception_architect for Zone {target_zone}.",
+                    reasoning=f"Detection {det:.0%} — early-deploying deception_architect for Zone {target_zone}.",
                     subagent_spec=spec,
                     role="commander",
                 )

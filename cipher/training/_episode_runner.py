@@ -194,11 +194,11 @@ def run_episode(
     # Place target files at HVT node
     hvt_files = graph.nodes[hvt_node].get("files", [])
     if hvt_files:
-        scenario.target_files = hvt_files[:3]
+        scenario.target_files = hvt_files[:1]
     else:
         # Ensure HVT has target files
         scenario.target_files = [
-            f"target_{hvt_node}_{i}" for i in range(3)
+            f"target_{hvt_node}_{i}" for i in range(1)
         ]
         graph.nodes[hvt_node]["files"] = list(scenario.target_files)
 
@@ -554,6 +554,42 @@ def run_episode(
             if verbose:
                 _print_action(step, action, state, "blue")
 
+        # Blue enforcement: if confidence is already high and anomalies exist,
+        # force one alert this step when policy outputs only passive actions.
+        # This converts detection progress into decisive interruption pressure.
+        if (
+            blue_obs.anomaly_feed
+            and state.blue_detection_confidence >= 0.72
+            and not any(a.action_type == ActionType.TRIGGER_ALERT for a in blue_actions)
+        ):
+            forced_target = max(blue_obs.anomaly_feed, key=lambda a: a.severity).node_id
+            forced_alert = Action(
+                agent_id="blue_command_enforcer",
+                action_type=ActionType.TRIGGER_ALERT,
+                target_node=forced_target,
+                reasoning=(
+                    f"[AUTO-ESCALATE] Detection {state.blue_detection_confidence:.2f} "
+                    f"with active anomalies — forcing alert at node {forced_target}."
+                ),
+                role="commander",
+            )
+            forced_alert.step = step
+            blue_actions.append(forced_alert)
+            result = _process_blue_action(forced_alert, state, emergent_eval=emergent_eval, graph=graph)
+            state.log_action(
+                agent_id=forced_alert.agent_id,
+                action_type=forced_alert.action_type.value,
+                action_payload={
+                    "target_node": forced_alert.target_node,
+                    "reasoning": forced_alert.reasoning,
+                    "trap_params": {},
+                },
+                result=result,
+            )
+            _log_agent_thought(step, forced_alert)
+            if verbose:
+                _print_action(step, forced_alert, state, "blue")
+
         # ── v2: persist subagent lifecycle events into episode log ──
         # Use a per-commander cursor so we keep the canonical events list
         # intact in the registry (used by the trace metadata at episode end).
@@ -584,21 +620,31 @@ def run_episode(
 
         # ── Passive detection boost (applied before terminal check) ─────
         # Each step, RED's suspicion generates detectable anomalies proportionally.
+        # Start earlier so fast RED runs do not always beat BLUE's detection curve.
         # Placed here so the co-detection check can fire in the same step as
         # RED's last move/exfiltration, giving BLUE a fair chance to interrupt.
-        _passive_boost = round(float(state.red_suspicion_score) * 0.04, 4)
-        if _passive_boost > 0:
-            state.blue_detection_confidence = min(
-                1.0, state.blue_detection_confidence + _passive_boost
-            )
+        if state.step > 3:
+            _passive_boost = round(float(state.red_suspicion_score) * 0.025, 4)
+            if state.red_current_node is not None:
+                try:
+                    z = state.get_zone_for_node(state.red_current_node)
+                    if z is not None and int(z) >= 2:
+                        _passive_boost = round(_passive_boost + 0.01, 4)
+                except Exception:
+                    pass
+            if _passive_boost > 0:
+                state.blue_detection_confidence = min(
+                    1.0, state.blue_detection_confidence + _passive_boost
+                )
 
         # ── High-confidence co-detection terminal ─────────────────────────
-        # BLUE wins when both detection confidence AND RED suspicion cross 0.75.
+        # BLUE wins when both detection confidence AND RED suspicion cross thresholds.
+        # Slightly lowered so BLUE can convert strong evidence before instant exfil.
         # Applied before is_done() so it can interrupt a final exfiltration step.
         if (
             not state.is_terminal
-            and state.blue_detection_confidence >= 0.75
-            and state.red_suspicion_score >= 0.75
+            and state.blue_detection_confidence >= 0.78
+            and state.red_suspicion_score >= 0.72
         ):
             state.is_terminal = True
             state.terminal_reason = "detected"
@@ -791,25 +837,26 @@ def run_episode(
     elif state.terminal_reason in ("detected", "aborted"):
         _winner = "blue"
 
-    _record_episode_memory({
-        "episode_number": episode_number,
-        "winner": _winner,
-        "terminal_reason": state.terminal_reason or "max_steps",
-        "steps": state.step,
-        "red_total_reward": round(red_reward.total, 3),
-        "blue_total_reward": round(blue_reward.total, 3),
-        "red_emergent_used": bool(_red_emergent_intents),
-        "red_emergent_intents": _red_emergent_intents,
-        "blue_emergent_used": bool(_blue_emergent_intents),
-        "blue_emergent_intents": _blue_emergent_intents,
-        "red_exfiltrated": len(state.red_exfiltrated_files),
-        "red_suspicion_final": round(state.red_suspicion_score, 3),
-        "blue_detection_final": round(state.blue_detection_confidence, 3),
-        "zone_stall_occurred": any(
-            isinstance(_e.get("payload"), dict) and "ZONE STALL" in str(_e.get("payload", {}).get("reasoning", ""))
-            for _e in state.episode_log
-        ),
-    })
+    if episode_number % 5 == 0:
+        _record_episode_memory({
+            "episode_number": episode_number,
+            "winner": _winner,
+            "terminal_reason": state.terminal_reason or "max_steps",
+            "steps": state.step,
+            "red_total_reward": round(red_reward.total, 3),
+            "blue_total_reward": round(blue_reward.total, 3),
+            "red_emergent_used": bool(_red_emergent_intents),
+            "red_emergent_intents": _red_emergent_intents,
+            "blue_emergent_used": bool(_blue_emergent_intents),
+            "blue_emergent_intents": _blue_emergent_intents,
+            "red_exfiltrated": len(state.red_exfiltrated_files),
+            "red_suspicion_final": round(state.red_suspicion_score, 3),
+            "blue_detection_final": round(state.blue_detection_confidence, 3),
+            "zone_stall_occurred": any(
+                isinstance(_e.get("payload"), dict) and "ZONE STALL" in str(_e.get("payload", {}).get("reasoning", ""))
+                for _e in state.episode_log
+            ),
+        })
 
     if verbose:
         _print_rewards(red_reward, blue_reward, oversight, judgment)
@@ -1164,6 +1211,12 @@ def _process_blue_action(
                 result["correct_alert"] = False
                 result["near_miss"] = True
                 result["state_delta"]["near_miss"] = True
+                # High-confidence near-miss in adjacent node is treated as actionable
+                # detection pressure and can end the episode for BLUE.
+                if state.blue_detection_confidence >= 0.75 and state.red_suspicion_score >= 0.60:
+                    state.is_terminal = True
+                    state.terminal_reason = "detected"
+                    result["state_delta"]["detected_on_near_miss"] = True
             else:
                 # Full miss — confidence penalty scales with how many FPs already issued
                 fp_count = getattr(state, "blue_false_positives", 0)

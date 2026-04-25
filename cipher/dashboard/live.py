@@ -401,7 +401,8 @@ def _load_rewards_csv() -> Optional[pd.DataFrame]:
         try:
             if not csv_path.exists() or csv_path.stat().st_size == 0:
                 return None
-            frame = pd.read_csv(csv_path)
+            # on_bad_lines='skip' handles column-count mismatches from schema evolution
+            frame = pd.read_csv(csv_path, on_bad_lines="skip")
             if "episode" in frame.columns:
                 frame["episode"] = pd.to_numeric(frame["episode"], errors="coerce")
                 frame = frame.dropna(subset=["episode"])
@@ -427,7 +428,7 @@ def _load_rewards_csv() -> Optional[pd.DataFrame]:
                 if numeric_col in frame.columns:
                     frame[numeric_col] = pd.to_numeric(frame[numeric_col], errors="coerce")
             return frame if not frame.empty else None
-        except (OSError, pd.errors.ParserError):
+        except OSError:
             # File may be locked by the training loop — brief wait then retry
             if attempt < 2:
                 time.sleep(0.05)
@@ -504,7 +505,7 @@ def _get_run_frame() -> Optional[pd.DataFrame]:
                 db_frame[col] = pd.to_numeric(db_frame[col], errors="coerce")
         if "episode" in db_frame.columns:
             db_frame["episode"] = pd.to_numeric(db_frame["episode"], errors="coerce").astype("Int64")
-        return db_frame
+        return _normalize_reward_frame(db_frame)
 
     # CSV fallback: filter by run started_at
     frame = _load_rewards_csv()
@@ -516,10 +517,13 @@ def _get_run_frame() -> Optional[pd.DataFrame]:
         try:
             cutoff = pd.to_datetime(started_at)
             ts = pd.to_datetime(frame["timestamp"], errors="coerce")
-            frame = frame[ts >= cutoff].copy()
+            filtered = frame[ts >= cutoff].copy()
+            # If the timestamp filter yields data, use it; otherwise show all history
+            if not filtered.empty:
+                frame = filtered
         except Exception:
             pass
-    return frame if not frame.empty else None
+    return _normalize_reward_frame(frame if not frame.empty else None)
 
 
 def _load_live_steps() -> list[dict]:
@@ -588,6 +592,50 @@ def _stat(label: str, value: str, color: str = TEXT_PRIMARY) -> html.Div:
 
 _GRAPH_CACHE: dict[str, object] = {}
 _TAB2_CACHE: dict[str, object] = {}  # B1: filter-result cache
+
+_REQUIRED_NUMERIC_COLS = (
+    "red_total",
+    "blue_total",
+    "red_exfil",
+    "red_stealth",
+    "red_memory",
+    "red_complexity",
+    "red_abort_penalty",
+    "red_honeypot_penalty",
+    "blue_detection",
+    "blue_speed",
+    "blue_fp_penalty",
+    "blue_honeypot_rate",
+    "blue_graph_reconstruction",
+    "oversight_red_adj",
+    "oversight_blue_adj",
+)
+
+
+def _normalize_reward_frame(frame: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Normalize reward dataframe schema so chart callbacks don't fail on partial rows."""
+    if frame is None or frame.empty:
+        return None
+
+    safe = frame.copy()
+    if "episode" not in safe.columns:
+        safe["episode"] = np.arange(1, len(safe) + 1)
+    safe["episode"] = pd.to_numeric(safe["episode"], errors="coerce")
+    safe = safe.dropna(subset=["episode"])
+    if safe.empty:
+        return None
+    safe["episode"] = safe["episode"].astype(int)
+
+    if "terminal_reason" not in safe.columns:
+        safe["terminal_reason"] = "unknown"
+    safe["terminal_reason"] = safe["terminal_reason"].fillna("unknown").astype(str)
+
+    for col in _REQUIRED_NUMERIC_COLS:
+        if col not in safe.columns:
+            safe[col] = 0.0
+        safe[col] = pd.to_numeric(safe[col], errors="coerce").fillna(0.0)
+
+    return safe.sort_values("episode").reset_index(drop=True)
 
 
 def _load_agent_status() -> dict:
@@ -743,6 +791,8 @@ def create_live_layout() -> html.Div:
                 children=render_tab("tab-rewards"),
                 style={"padding": "12px 16px", "background": DARK_BG, "minHeight": "600px"},
             ),
+            # Fires on tab switches so a clientside callback can force Plotly relayout.
+            dcc.Store(id="plotly-resize-trigger"),
             dcc.Interval(id="interval-component",
                          interval=config.dashboard_live_update_interval, n_intervals=0),
             # B4: fast 1s interval just for agent status bar + live logs
@@ -824,9 +874,12 @@ def update_header(_n):
 
 
 def update_tab1(_n):
-    frame = _get_run_frame()
     empty = go.Figure().update_layout(**PLOTLY_LAYOUT)
     _no_data = html.Div("No episode data yet for this run.", style={"color": TEXT_MUTED})
+    try:
+        frame = _get_run_frame()
+    except Exception:
+        return empty, empty, empty, _no_data, html.Div()
     if frame is None or frame.empty:
         return empty, empty, empty, _no_data, html.Div()
 
@@ -1628,6 +1681,25 @@ def update_tab_logs(_n):
         )]
     else:
         feed = []
+
+        def _fmt_agent_action(agent: dict) -> tuple[str, str]:
+            agent_id = str(agent.get("agent_id", "agent"))
+            team = str(agent.get("team", ""))
+            action = str(agent.get("action_type", "unknown"))
+            node = agent.get("target_node")
+            target_file = agent.get("target_file")
+            role = agent_id.replace("_01", "").replace("_", " ")
+
+            detail = action
+            if node is not None:
+                detail += f"→n{node}"
+            elif target_file:
+                detail += f"→{str(target_file)[:20]}"
+
+            label = f"{role}: {detail}"
+            color = RED_COLOR if team == "red" else BLUE_COLOR
+            return label, color
+
         # Group by episode
         current_ep = None
         for s in steps:
@@ -1643,6 +1715,7 @@ def update_tab_logs(_n):
             exfil = s.get("exfil_count", 0)
             files = s.get("exfil_files", [])
             ts = s.get("timestamp", "")[:19].replace("T", " ")
+            all_agents = list(s.get("all_agents") or [])
 
             if ep != current_ep:
                 current_ep = ep
@@ -1679,6 +1752,38 @@ def update_tab_logs(_n):
                 style={"padding": "2px 0", "borderBottom": f"1px solid #111",
                        "lineHeight": "1.6"},
             ))
+
+            # v2 architecture detail line: exact commander + subagent actions for this step
+            if all_agents:
+                agent_parts = []
+                for ag in all_agents:
+                    label, color = _fmt_agent_action(ag)
+                    agent_parts.append(
+                        html.Span(
+                            label,
+                            style={
+                                "color": color,
+                                "fontSize": "10px",
+                                "marginRight": "8px",
+                                "padding": "1px 5px",
+                                "border": f"1px solid {color}33",
+                                "borderRadius": "3px",
+                                "background": "#0e1118",
+                            },
+                        )
+                    )
+                feed.append(
+                    html.Div(
+                        agent_parts,
+                        style={
+                            "display": "flex",
+                            "flexWrap": "wrap",
+                            "gap": "4px",
+                            "padding": "2px 0 6px 24px",
+                            "borderBottom": f"1px solid {BORDER_COLOR}",
+                        },
+                    )
+                )
 
     # Agent status at top of log tab
     agent_bar = update_agent_status_bar(0)
@@ -1888,6 +1993,21 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
     def _tab_content(tab):
         return render_tab(tab)
 
+    # Plotly graphs mounted while hidden (display:none) can keep stale dimensions.
+    # Trigger a resize burst whenever tabs change so charts reflow correctly.
+    target_app.clientside_callback(
+        """
+        function(tabValue) {
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 0);
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 120);
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
+            return tabValue;
+        }
+        """,
+        Output("plotly-resize-trigger", "data"),
+        Input("main-tabs", "value"),
+    )
+
     @target_app.callback(
         [
             Output("t1-main-chart", "figure"),
@@ -1897,7 +2017,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t1-live-feed", "children"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab1(n):
         return update_tab1(n)
@@ -1909,7 +2028,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t-logs-feed", "children"),
         ],
         Input("interval-fast", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab_logs(n):
         return update_tab_logs(n)
@@ -1926,7 +2044,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Input("t2-filter", "value"),
         ],
         State("t2-filter-cache", "data"),
-        prevent_initial_call=True,
     )
     def _tab2(n, filter_val, cached_filter):
         return update_tab2(n, filter_val, cached_filter)
@@ -1938,7 +2055,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t3-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab3(n):
         return update_tab3(n)
@@ -1950,7 +2066,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t4-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab4(n):
         return update_tab4(n)
@@ -1962,7 +2077,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t5-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab5(n):
         return update_tab5(n)
@@ -1975,7 +2089,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("t6-stats", "children"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab6(n):
         return update_tab6(n)
@@ -1989,7 +2102,6 @@ def register_callbacks_on(target_app: dash.Dash) -> None:
             Output("th-table", "data"),
         ],
         Input("interval-component", "n_intervals"),
-        prevent_initial_call=True,
     )
     def _tab_history(n):
         return update_tab_history(n)

@@ -62,6 +62,23 @@ class RewardLogger:
         if not self.LOG_FILE.exists():
             with open(self.LOG_FILE, "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=self.COLUMNS).writeheader()
+        else:
+            # If column count changed, rewrite header row to match current COLUMNS
+            try:
+                with open(self.LOG_FILE, "r", encoding="utf-8") as f:
+                    first_line = f.readline().strip()
+                existing_cols = [c.strip() for c in first_line.split(",")]
+                if existing_cols != self.COLUMNS:
+                    # Read all rows, rewrite file with updated header
+                    with open(self.LOG_FILE, "r", encoding="utf-8") as f:
+                        old_rows = list(csv.DictReader(f))
+                    with open(self.LOG_FILE, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=self.COLUMNS, extrasaction="ignore")
+                        writer.writeheader()
+                        for row in old_rows:
+                            writer.writerow({col: row.get(col, "") for col in self.COLUMNS})
+            except Exception:
+                pass
 
     def log(
         self,

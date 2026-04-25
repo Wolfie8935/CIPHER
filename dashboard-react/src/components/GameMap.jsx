@@ -209,6 +209,98 @@ function parseActionList(text) {
     .filter(Boolean);
 }
 
+function shortAgentName(agentId, fallback = 'Agent') {
+  const raw = String(agentId ?? '').trim();
+  if (!raw) return fallback;
+  return raw
+    .replace(/^(red|blue|system)_/i, '')
+    .replace(/_\d+$/i, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function inferTeam(agentId, fallback = 'red') {
+  const raw = String(agentId ?? '').toLowerCase();
+  if (raw.startsWith('blue_')) return 'blue';
+  if (raw.startsWith('red_')) return 'red';
+  return fallback;
+}
+
+function extractSpawnEventsFromStep(step) {
+  if (!step) return [];
+  const stepNo = Number(step.step ?? 0);
+  const events = [];
+  const sourceEntries = Array.isArray(step.all_agents) ? step.all_agents : [];
+
+  for (const entry of sourceEntries) {
+    const action = actionToken(entry?.action_type);
+    if (action !== 'spawn_subagent') continue;
+    const payload = entry?.payload ?? {};
+    const agentId = String(entry?.agent_id ?? payload?.spawner_id ?? payload?.parent_agent_id ?? '');
+    const team = inferTeam(agentId, 'red');
+    const spawnedId = String(
+      payload?.spawned_agent_id
+      ?? payload?.subagent_id
+      ?? payload?.child_agent_id
+      ?? payload?.agent_id
+      ?? `agent_${stepNo}`,
+    );
+    const work = String(
+      payload?.task
+      ?? payload?.work
+      ?? payload?.objective
+      ?? payload?.goal
+      ?? entry?.detail
+      ?? 'assigned task',
+    ).trim();
+    const fromNode = parseNodeId(
+      payload?.source_node
+      ?? payload?.from_node
+      ?? payload?.origin_node
+      ?? payload?.spawner_node
+      ?? entry?.source_node
+      ?? entry?.from_node
+      ?? entry?.target_node,
+    );
+    const toNode = parseNodeId(
+      payload?.target_node
+      ?? payload?.node
+      ?? payload?.spawn_node
+      ?? payload?.to_node
+      ?? entry?.target_node
+      ?? entry?.node,
+    );
+    events.push({
+      key: `spawn-${stepNo}-${agentId || 'agent'}-${spawnedId}`,
+      step: stepNo,
+      team,
+      spawner: shortAgentName(agentId, team.toUpperCase()),
+      spawned: shortAgentName(spawnedId, 'Agent'),
+      work,
+      fromNode,
+      toNode,
+    });
+  }
+
+  // Fallback for compact replay/live rows where spawn appears in red_action.
+  const redAct = actionToken(step.red_action);
+  if (redAct === 'spawn_subagent') {
+    const node = parseNodeId(step.red_node ?? step.target_node ?? step.red_action);
+    events.push({
+      key: `spawn-${stepNo}-red-fallback-${node ?? 'x'}`,
+      step: stepNo,
+      team: 'red',
+      spawner: 'Commander',
+      spawned: 'Subagent',
+      work: 'forward operation',
+      fromNode: node,
+      toNode: node,
+    });
+  }
+
+  return events;
+}
+
 function extractOperationalMarkers(steps, redThoughts, blueThoughts) {
   const traps = [];
   const deadDrops = [];
@@ -334,6 +426,9 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
   const [hovered,  setHovered]  = useState(null);
   const [selected, setSelected] = useState(null);
   const [hoveredAgent, setHoveredAgent] = useState(null);
+  const [spawnBursts, setSpawnBursts] = useState([]);
+  const [spawnNotices, setSpawnNotices] = useState([]);
+  const seenSpawnRef = useRef(new Set());
 
   // Pulse timer
   const [tick, setTick] = useState(0);
@@ -416,6 +511,42 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
     () => buildDefinitiveObjectiveFileSet(steps),
     [steps],
   );
+  const nowMs = performance.now();
+
+  useEffect(() => {
+    if (!steps?.length) return;
+    const latestStep = steps[steps.length - 1];
+    const spawns = extractSpawnEventsFromStep(latestStep);
+    if (spawns.length === 0) return;
+
+    const fresh = spawns.filter((evt) => {
+      if (seenSpawnRef.current.has(evt.key)) return false;
+      seenSpawnRef.current.add(evt.key);
+      return true;
+    });
+    if (fresh.length === 0) return;
+
+    const bornAt = performance.now();
+    setSpawnBursts((prev) => {
+      const keep = prev.filter((evt) => bornAt - evt.bornAt < 2600);
+      return [
+        ...keep,
+        ...fresh.map((evt) => ({ ...evt, id: `${evt.key}-${bornAt}`, bornAt, duration: 1650 })),
+      ].slice(-18);
+    });
+
+    setSpawnNotices((prev) => {
+      const keep = prev.filter((evt) => bornAt <= evt.expiresAt);
+      const additions = fresh.map((evt, idx) => ({
+        id: `${evt.key}-notice-${bornAt}-${idx}`,
+        team: evt.team,
+        text: `${evt.team.toUpperCase()} spawned ${evt.spawned} for ${evt.work}`,
+        bornAt,
+        expiresAt: bornAt + 3600,
+      }));
+      return [...additions, ...keep].slice(0, 4);
+    });
+  }, [steps]);
 
   // ── Pan / zoom ───────────────────────────────────────────────────
   const onWheel = useCallback((e) => {
@@ -503,7 +634,8 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
         <g transform={`translate(${pan.x + svgW / 2}, ${pan.y + svgH / 2}) scale(${zoom}) translate(${-CX}, ${-CY})`}>
 
           {/* Map background */}
-          <rect x={0} y={0} width={W} height={H} fill="#101826" />
+          {/* Match app shell color so battle view feels seamless */}
+          <rect x={0} y={0} width={W} height={H} fill="#131a24" />
 
           {/* Subtle grid */}
           <g opacity={0.04}>
@@ -839,6 +971,60 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             );
           })}
 
+          {/* ── Spawn burst FX (spawner -> spawned) ── */}
+          {spawnBursts.map((evt) => {
+            const age = nowMs - evt.bornAt;
+            if (age < 0 || age > evt.duration) return null;
+            const from = positions[evt.fromNode];
+            const to = positions[evt.toNode];
+            if (!from || !to) return null;
+            const t = Math.min(1, Math.max(0, age / evt.duration));
+            const accent = evt.team === 'blue' ? '88,166,255' : '255,92,92';
+            const glowOpacity = (1 - t) * 0.85;
+            const popScale = 0.35 + easeInOutCubic(t);
+            const traceX = from.x + (to.x - from.x) * t;
+            const traceY = from.y + (to.y - from.y) * t;
+            return (
+              <g key={evt.id} style={{ pointerEvents: 'none' }}>
+                <line
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  stroke={`rgba(${accent},${0.12 + (1 - t) * 0.36})`}
+                  strokeWidth={1.6}
+                  strokeDasharray="4 6"
+                />
+                <circle
+                  cx={traceX}
+                  cy={traceY}
+                  r={4.2}
+                  fill={`rgba(${accent},${0.86 - t * 0.52})`}
+                  filter={evt.team === 'blue' ? 'url(#blueGlow)' : 'url(#redGlow)'}
+                />
+                <circle
+                  cx={to.x}
+                  cy={to.y}
+                  r={10 + popScale * 24}
+                  fill={`rgba(${accent},${glowOpacity * 0.22})`}
+                  stroke={`rgba(${accent},${glowOpacity * 0.95})`}
+                  strokeWidth={1.5}
+                />
+                <text
+                  x={to.x}
+                  y={to.y - 22 - (1 - t) * 12}
+                  textAnchor="middle"
+                  fontSize={8}
+                  fontFamily="'JetBrains Mono', monospace"
+                  letterSpacing="0.06em"
+                  fill={`rgba(230,240,255,${0.42 + glowOpacity * 0.56})`}
+                >
+                  + {evt.spawned}
+                </text>
+              </g>
+            );
+          })}
+
           {/* ── 4 BLUE agents ── */}
           {bluePositions.map((bp, i) => {
             if (isCenter(bp)) return null;
@@ -1143,28 +1329,6 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
           ))}
         </g>
 
-        {/* ── Agent legend (top-right) ── */}
-        <g transform={`translate(${svgW - 155}, 8)`}>
-          <rect x={0} y={0} width={145} height={80} rx={8}
-            fill="rgba(10,12,18,0.82)"
-            stroke="rgba(140,160,210,0.10)"
-            strokeWidth={1}
-          />
-          <circle cx={14} cy={18} r={5} fill="#ff4444" />
-          <text x={24} y={22} fontSize={8.5} fontFamily="'JetBrains Mono', monospace" fontWeight="700" fill="#ff4444" opacity={0.8}>
-            RED  PLNR·ANLT·OPRT·EXFL
-          </text>
-          <circle cx={14} cy={38} r={5} fill="#4488ff" />
-          <text x={24} y={42} fontSize={8.5} fontFamily="'JetBrains Mono', monospace" fontWeight="700" fill="#4488ff" opacity={0.8}>
-            BLUE SURV·HUNT·DCVR·FRNS
-          </text>
-          <text x={14} y={60} fontSize={7.5} fontFamily="'JetBrains Mono', monospace" fill="rgba(140,160,210,0.30)" letterSpacing="0.06em">
-            T = BLUE traps · DD = RED drops
-          </text>
-          <text x={14} y={72} fontSize={7.5} fontFamily="'JetBrains Mono', monospace" fill="rgba(140,160,210,0.30)" letterSpacing="0.06em">
-            scroll to zoom · drag to pan
-          </text>
-        </g>
       </svg>
 
       {/* ── Viewport controls ── */}
@@ -1187,6 +1351,42 @@ export default function GameMap({ graph, steps, agentStatus, redThoughts, blueTh
             lineHeight: 1,
           }}>{label}</button>
         ))}
+      </div>
+
+      {/* ── Spawn notifications ── */}
+      <div style={{ position: 'absolute', top: 12, right: 14, display: 'flex', flexDirection: 'column', gap: 6, pointerEvents: 'none', zIndex: 55 }}>
+        {spawnNotices
+          .filter((note) => nowMs <= note.expiresAt)
+          .map((note) => {
+            const age = nowMs - note.bornAt;
+            const life = Math.max(0, (note.expiresAt - nowMs) / Math.max(1, note.expiresAt - note.bornAt));
+            const entering = Math.min(1, age / 260);
+            const accent = note.team === 'blue' ? '#66a6ff' : '#ff6d6d';
+            return (
+              <div
+                key={note.id}
+                style={{
+                  transform: `translateY(${(1 - entering) * -8}px) scale(${0.95 + entering * 0.05})`,
+                  opacity: Math.min(1, entering) * (0.35 + life * 0.65),
+                  background: 'rgba(8,14,26,0.92)',
+                  border: `1px solid ${accent}66`,
+                  borderRadius: 7,
+                  padding: '4px 9px',
+                  boxShadow: `0 2px 14px ${accent}30`,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 9,
+                  letterSpacing: '0.05em',
+                  color: accent,
+                  whiteSpace: 'nowrap',
+                  maxWidth: 340,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {note.text}
+              </div>
+            );
+          })}
       </div>
     </div>
   );

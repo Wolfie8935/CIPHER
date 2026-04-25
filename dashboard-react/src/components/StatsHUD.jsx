@@ -35,7 +35,7 @@ function GaugeBar({ value, label, color }) {
   );
 }
 
-export default function StatsHUD({ latest, winnerCard, completionSignals }) {
+export default function StatsHUD({ latest, winnerCard, completionSignals, commanderLifecycle, rightOffset = 14 }) {
   const suspicion = latest?.suspicion ?? 0;
   const detection = latest?.detection ?? 0;
   const zone      = latest?.zone      ?? 'Perimeter';
@@ -63,9 +63,12 @@ export default function StatsHUD({ latest, winnerCard, completionSignals }) {
       : winnerState === 'DRAW'
         ? { color: '#d6e1f3', bg: 'rgba(190,205,235,0.12)', border: 'rgba(190,205,235,0.30)' }
         : { color: 'var(--text-mute)', bg: 'rgba(140,160,210,0.08)', border: 'rgba(140,160,210,0.20)' };
+  const hasCommanderTelemetry = Boolean(
+    commanderLifecycle?.red?.hasData || commanderLifecycle?.blue?.hasData
+  );
 
   return (
-    <div className="stats-hud">
+    <div className="stats-hud" style={{ right: rightOffset, transition: 'right 0.35s cubic-bezier(0.4,0,0.2,1)' }}>
 
       {/* Suspicion + Detection */}
       <div className="hud-card">
@@ -120,6 +123,51 @@ export default function StatsHUD({ latest, winnerCard, completionSignals }) {
             💀 {exfil} FILE{exfil > 1 ? 'S' : ''} EXFILTRATED
           </div>
         )}
+      </div>
+
+      {/* Commander lifecycle (anchored below zone card) */}
+      <div className="hud-card" style={{ paddingTop: 8 }}>
+        <div style={{ fontSize: 8, letterSpacing: '0.14em', color: 'rgba(170,190,225,0.62)', marginBottom: 7 }}>
+          COMMANDER AGENT LIFECYCLE
+        </div>
+        {!hasCommanderTelemetry && (
+          <div style={{ fontSize: 9, color: 'rgba(170,190,225,0.58)', fontStyle: 'italic', padding: '2px 0 6px' }}>
+            Commander telemetry unavailable for this trace.
+          </div>
+        )}
+        {[
+          { key: 'red', label: 'RED COMMANDER', color: '#ff6f6f', stats: commanderLifecycle?.red ?? { spawned: 0, live: 0, expired: 0 } },
+          { key: 'blue', label: 'BLUE COMMANDER', color: '#79adff', stats: commanderLifecycle?.blue ?? { spawned: 0, live: 0, expired: 0 } },
+        ].map((row) => (
+          <div
+            key={row.key}
+            style={{
+              border: `1px solid ${row.color}44`,
+              borderRadius: 7,
+              padding: '6px 7px',
+              marginBottom: row.key === 'red' ? 6 : 0,
+              background: `${row.color}12`,
+            }}
+          >
+            <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.10em', color: row.color, marginBottom: 5 }}>
+              {row.label}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4 }}>
+              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                <span style={{ color: 'rgba(150,170,205,0.66)' }}>spawned</span><br />
+                <span style={{ fontSize: 11, fontWeight: 700 }}>{row.stats.spawned}</span>
+              </div>
+              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                <span style={{ color: 'rgba(150,170,205,0.66)' }}>live</span><br />
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#86f4bd' }}>{row.stats.live}</span>
+              </div>
+              <div style={{ fontSize: 8.5, color: 'rgba(226,236,255,0.84)' }}>
+                <span style={{ color: 'rgba(150,170,205,0.66)' }}>expired</span><br />
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#ffb38f' }}>{row.stats.expired}</span>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Winner card (only after episode completes) */}

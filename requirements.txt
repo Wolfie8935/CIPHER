@@ -1,3 +1,4 @@
+# ── Core runtime (env, agents, config) ─────────────────────────────────────────
 python-dotenv>=1.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.2.0
@@ -5,22 +6,47 @@ networkx>=3.2
 openai>=1.30.0
 rich>=13.7.0
 colorlog>=6.8.0
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
+numpy>=1.26.0
+pandas>=2.0.0
+requests>=2.31.0
+
+# ── OpenEnv + HF utilities ────────────────────────────────────────────────────
+openenv>=0.1.13
+huggingface_hub>=0.23.0
+
+# ── Dash dashboard (cipher/dashboard) ───────────────────────────────────────
 plotly>=5.20.0
 dash>=2.16.0
 dash-bootstrap-components>=1.5.0
-numpy>=1.26.0
-pandas>=2.0.0
+
+# ── React warroom API (dashboard-react/api_server.py) ────────────────────────
+flask>=3.0.0
+flask-cors>=5.0.0
+
+# ── Plots & submission assets (generate_plots.py) ─────────────────────────────
 matplotlib>=3.8.0
-openenv>=0.1.13
-huggingface_hub>=0.23.0
+
+# ── Tests ───────────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# ── Production serving (HF Spaces Dockerfile) ───────────────────────────────
 gunicorn>=22.0.0
 
-torch
-torchvision
+# ── Local / hybrid LoRA inference (cipher/utils/lora_client.py) ──────────────
+# Install torch for your platform: https://pytorch.org/get-started/locally/
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.40.0
+peft>=0.11.0
+accelerate>=0.30.0
+safetensors>=0.4.0
+sentencepiece>=0.1.99
 
-# ── RunPod / training only (not needed for local dev) ────────────────────────
-# Install manually on RunPod:
-#   pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-#   pip install trl>=0.12.0 datasets>=2.19.0 accelerate>=0.30.0 peft>=0.11.0 bitsandbytes>=0.43.0
+# ── Optional: Jupyter (local notebooks) ───────────────────────────────────────
+# ipykernel>=6.29.0
+# jupyter>=1.0.0
+
+# ── RunPod / Colab training only (large; install when fine-tuning) ───────────
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# pip install trl>=0.12.0 datasets>=2.19.0 bitsandbytes>=0.43.0

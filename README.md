@@ -32,6 +32,15 @@ What makes this hard is **asymmetric information**:
 
 Neither team can win through brute force. RED must deceive. BLUE must infer. Both must model what the other team *believes* — not just what it does.
 
+### New features (submission v2)
+
+| Feature | What it adds |
+|---------|----------------|
+| **Emergent actions** | Typed actions beyond fixed verbs — bonus terms in RED/BLUE rewards (`red_emergent_bonus`, `blue_emergent_bonus`) reward coherent multi-step patterns. |
+| **File corruption** | Dead-drop and file-integrity mechanics let BLUE poison intel; RED must recover or route around corrupted drops. |
+| **Dynamic difficulty** | `ScenarioGenerator` auto-escalates from rolling RED win rate (see `openenv.yaml` curriculum block). |
+| **Forensics dashboard** | BLUE Forensics + **React dashboard** tabs (Analytics, History, RL metrics) surface op-graph reconstruction and fleet verdicts live. |
+
 ```
 python main.py          # Watch a full episode — no API key needed, runs in seconds
 python main.py --train  # Start training loop — writes rewards_log.csv + live dashboard
@@ -45,47 +54,47 @@ The training data tells the story clearly.
 
 ### RED Agent: Stub Baseline vs Full LLM Performance
 
-![Baseline vs Trained](plots/baseline_vs_trained.png)
+![Baseline vs Trained](assets/baseline_vs_trained.png)
 
 *Starting from a stub baseline (0% RED wins, mean reward −0.24), the RED Planner improved to a 70.5% win rate with mean reward +0.61 after moving to full LLM inference across 1,082 logged episodes. The rolling reward curve (bottom panel) shows the reward crossing zero and staying positive after the LLM training phase begins.*
 
 ### Win Rate Progression Across All 1,082 Episodes
 
-![Win Rate Progression](plots/win_rate_progression.png)
+![Win Rate Progression](assets/win_rate_progression.png)
 
 *The 50-episode rolling RED win rate starts at 0%, hovers near zero during the early stub phase, then climbs steadily once LLM inference takes over — finishing above 70%.*
 
 ### Episode Reward Curves — Full Training History
 
-![Reward Curves](plots/reward_curves.png)
+![Reward Curves](assets/reward_curves.png)
 
 *Top panel: RED vs BLUE rolling-mean reward across all episodes. Bottom panel: RED reward component breakdown — exfiltration score rising while penalties decrease as the agent learns to avoid honeypots.*
 
 ### Elo Rating — RED vs BLUE
 
-![Elo Chart](plots/elo_chart.png)
+![Elo Chart](assets/elo_chart.png)
 
 *RED Elo climbs from 1000 to ~1150+ as training progresses, crossing above BLUE's rating in the final phase. The Oversight Auditor's fleet verdicts directly feed the Elo computation.*
 
 ### Terminal Outcome Distribution by Training Phase
 
-![Terminal Outcomes](plots/terminal_outcomes.png)
+![Terminal Outcomes](assets/terminal_outcomes.png)
 
 *Left: In the stub baseline, nearly all episodes end in abort or detection — zero exfiltration completions. By the full LLM phase, exfiltration_complete becomes the dominant outcome. Right: WIN rate improvement from 0% → 70.5%.*
 
 ### Oversight Auditor Fleet Verdicts
 
-![Fleet Verdicts](plots/fleet_verdicts.png)
+![Fleet Verdicts](assets/fleet_verdicts.png)
 
 *The Oversight Auditor's verdict distribution shifts from all-contested (stub baseline) to RED-dominant (full LLM phase), providing an independent confirmation of RED's improvement.*
 
 ### System Architecture Overview
 
-![Architecture](plots/architecture_card.png)
+![Architecture](assets/architecture_card.png)
 
 *9-agent CIPHER architecture: 4 RED agents coordinate via dead drops, 4 BLUE agents share an anomaly feed, and 1 Oversight Auditor issues fleet verdicts. X-axis: agent roles / environment components. Y-axis: information flow direction.*
 
-> **Regenerate plots:** `python generate_plots.py` — saves all `.png` files to `plots/` with labelled axes.
+> **Regenerate plots:** `python generate_plots.py` — writes PNGs to `plots/` and `assets/` (README embeds use `assets/`).
 
 ---
 
@@ -205,7 +214,7 @@ Runtime → Run all
 
 ```bash
 pip install -r requirements.txt
-python cipher-training-red-v2.py       # RED Planner
+jupyter notebook cipher-training-red-v2.ipynb   # local Unsloth + TRL GRPO template
 python cipher-training-blue-v2.py      # BLUE Surveillance (bonus)
 ```
 
@@ -297,10 +306,13 @@ See `commands.md` for the full reference.
 
 | Resource | Link |
 |---|---|
-| HuggingFace Space | *(uploading — link to be added)* |
+| GitHub repository | *(replace with your public repo URL after push)* |
+| HuggingFace Space | *(replace after deploy — Docker + `hf_app.py` on port 7860)* |
 | Training Notebook (Colab) | [CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb) |
-| Mini-blog (HuggingFace) | *(link to be added after upload)* |
-| Demo Video | *(link to be added)* |
+| Local training notebook | [cipher-training-red-v2.ipynb](cipher-training-red-v2.ipynb) |
+| Model / LoRA weights | *(optional: Hugging Face model repo URL for `cipher-red-planner` adapter)* |
+| Mini-blog (HuggingFace or GitHub wiki) | *(replace after publish)* |
+| Demo Video (2–3 min) | *(replace after YouTube / Loom upload)* |
 
 ---
 

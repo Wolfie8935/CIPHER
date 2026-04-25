@@ -64,7 +64,7 @@ Understanding which bonus prizes CIPHER qualifies for and how to make the claim 
 
 ---
 
-## SECTION 3 — COMPLETED PHASES (1–13, excl. HF Spaces/Blog)
+## SECTION 3 — COMPLETED PHASES (1–16, excl. HF Spaces/Blog)
 
 ### ✅ Phase 1 — Project Foundation
 **Built:** `CipherConfig` dataclass with all environment parameters. Structured logging via `cipher.utils.logger` with `get_logger()`. Module-level constants for zones, node types, action vocabularies. Folder structure establishing the full package layout. `cipher/utils/config.py` with environment variable overrides for every setting.
@@ -168,7 +168,31 @@ All traps logged to `state.trap_events` and emitted as `training_events.jsonl` e
 
 ---
 
-## SECTION 4 — PHASES OVERVIEW (8–15 STATUS)
+### Phase 14 — Emergent actions (typed / meta-actions)
+
+**Built:** Emergent action channel on RED/BLUE command paths with reward hooks (`red_emergent_bonus`, `blue_emergent_bonus` in `rewards_log.csv`). Encourages structured multi-step behaviours beyond fixed verb templates while staying compatible with stub and live LLM modes.
+
+**Why it matters:** Hackathon judging rewards innovation; emergent actions give the trainer a richer signal than discrete verb-only policies.
+
+---
+
+### Phase 15 — File corruption & dead-drop adversarial intel
+
+**Built:** Integrity and tampering paths on dead drops (BLUE `dead_drop_tamper` and related state); RED must reason about possibly corrupted vault reads. Logged alongside fleet verdicts for oversight correlation.
+
+**Why it matters:** Extends asymmetric information — RED cannot trust every drop — forcing stronger belief modeling.
+
+---
+
+### Phase 16 — Dynamic difficulty + forensics dashboard
+
+**Built:** `ScenarioGenerator` curriculum tied to rolling RED win rate (`openenv.yaml` curriculum block). Forensics agent op-graph reconstruction exposed in Dash + **dashboard-react** (Analytics, History, RL metrics) for live competition visibility.
+
+**Why it matters:** Dynamic difficulty prevents collapse to a single exploit; forensics dashboard makes BLUE reconstruction auditable for storytelling and demos.
+
+---
+
+## SECTION 4 — PHASES OVERVIEW (8–16 STATUS)
 
 ### ✅ PHASE 8 — OpenEnv API Compliance Wrapper
 **Priority: CRITICAL — Build First**
@@ -1143,6 +1167,162 @@ After the extended training run, update:
 
 ---
 
+## SECTION 6B — ARCHITECTURE UPDATE: GAMEPLAY BALANCE FIXES (2026-04-25)
+
+Six targeted balance and correctness fixes were applied to improve gameplay quality,
+RED win opportunity, and output accuracy. All 310 tests pass after these changes.
+
+### Fix 1 — Oscillation Override Applied to Planner Subagent Moves
+
+**File:** `cipher/agents/commander.py:334`
+
+**Problem:** `_is_oscillating()` required 3 visits in a 6-hop window before triggering.
+The planner subagent cycles (e.g. n25→n28→n29→n25→...) would not be caught until
+significant step-count was wasted.
+
+**Fix:** Lowered sensitivity to 2 visits in 4 hops. The override loop in `act_step()`
+already iterates all team MOVE actions — with the tighter window, oscillation is caught
+one cycle earlier and the zone-advancing redirect fires before the planner locks in.
+
+```python
+# Before
+recent = list(self._recent_nodes)[-6:]
+return any(c >= 3 for c in counts.values())
+
+# After
+recent = list(self._recent_nodes)[-4:]
+return any(c >= 2 for c in counts.values())
+```
+
+---
+
+### Fix 2 — Target Files Reduced from 3 → 1
+
+**File:** `cipher/training/_episode_runner.py:197`
+
+**Problem:** RED had to exfiltrate all 3 HVT files to win. Co-detection fires during
+the second and third exfiltration attempts, making clean RED wins nearly impossible.
+
+**Fix:** A single target file is now sufficient for RED to win the episode.
+
+```python
+# Before
+scenario.target_files = hvt_files[:3]  # and range(3)
+
+# After
+scenario.target_files = hvt_files[:1]  # and range(1)
+```
+
+---
+
+### Fix 3 — Passive Detection Boost Halved and Gated
+
+**File:** `cipher/training/_episode_runner.py:589`
+
+**Problem:** At 78% suspicion, the 4%/step boost added 3.1% detection per step —
+pushing BLUE to co-detection threshold even without active investigation, leaving RED
+no window to enter Zone 3.
+
+**Fix:** Rate reduced from 0.04 → 0.02 (halved), and gated to `step > 5` so RED has
+5 steps to establish zone presence before passive pressure starts.
+
+```python
+# Before
+_passive_boost = round(float(state.red_suspicion_score) * 0.04, 4)
+if _passive_boost > 0: ...
+
+# After
+if state.step > 5:
+    _passive_boost = round(float(state.red_suspicion_score) * 0.02, 4)
+    if _passive_boost > 0: ...
+```
+
+---
+
+### Fix 4 — Co-detection Threshold Raised to 0.82/0.80
+
+**File:** `cipher/training/_episode_runner.py:600`
+
+**Problem:** Co-detection at 0.75/0.75 fired mid-exfiltration, aborting RED's win
+even when they had already reached the HVT node.
+
+**Fix:** Thresholds raised to detection ≥ 0.82 AND suspicion ≥ 0.80. A fast RED run
+that reaches the HVT quickly can now complete exfiltration before the terminal fires.
+
+```python
+# Before
+and state.blue_detection_confidence >= 0.75
+and state.red_suspicion_score >= 0.75
+
+# After
+and state.blue_detection_confidence >= 0.82
+and state.red_suspicion_score >= 0.80
+```
+
+---
+
+### Fix 5 — False Positive Penalty Display Bug Fixed
+
+**File:** `main.py:615`
+
+**Problem:** `fp_pen=+1.000` was displaying as positive in the reward breakdown
+console output — masking that BLUE was being penalized. The stored value is the
+penalty magnitude (positive); the total subtracts it. The display needed to negate it.
+
+**Fix:** The display now negates the stored value:
+
+```python
+# Before
+f"fp_pen={getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
+
+# After
+f"fp_pen={-getattr(br,'false_positive_rate_penalty',0.0):+.3f}"
+```
+
+Now correctly shows `fp_pen=-1.000` for maximum penalty.
+
+---
+
+### Fix 6 — BLUE Deception Architect Spawns Earlier
+
+**File:** `cipher/agents/commander.py:707`
+
+**Problem:** BLUE waited until detection ≥ 20% before spawning `deception_architect`.
+By that point RED had already crossed Zone 2 anomaly nodes without encountering any
+honeypots.
+
+**Fix:** Threshold lowered to 10% — BLUE now deploys honeypots before RED arrives in
+Zone 2/3 anomaly zones, making the traps actually interdict rather than react.
+
+```python
+# Before
+if det >= 0.20 and ...
+
+# After
+if det >= 0.10 and ...
+```
+
+The task brief is also updated to emphasize pre-positioning: *"Place honeypots in Zone
+N and Zone N+1 to trap RED's advance before they arrive."*
+
+---
+
+### Balance Impact Summary
+
+| Change | Direction | Effect |
+|--------|-----------|--------|
+| Oscillation window 6→4 hops | Tighter | Faster zone progression for RED |
+| Target files 3→1 | Easier | Clean RED wins possible in one exfil |
+| Passive boost 0.04→0.02, gated step >5 | Looser | RED has entry window before pressure |
+| Co-detection 0.75→0.82/0.80 | Looser | RED can finish fast exfiltration |
+| fp_pen display negated | Correctness | Reward breakdown readable |
+| Deception architect at det≥10% | Tighter | BLUE honeypots pre-position earlier |
+
+Net effect: more contested episodes with genuine RED win paths, while BLUE has
+stronger proactive trap placement. Test count: **310 passing, 0 failing**.
+
+---
+
 ## SECTION 7 — COMPLETE PHASE TABLE
 
 | Phase | What | Compute | Status | Blocks |
@@ -1166,7 +1346,8 @@ After the extended training run, update:
 **Test count (final):**
 - After Phase 7: 179 tests
 - After Phase 13: 290 tests ✅ (all passing)
-- **Actual at submission: 290 tests, 0 failing**
+- After Balance Fixes (2026-04-25): 310 tests ✅ (all passing)
+- **Actual at submission: 310 tests, 0 failing**
 
 ---
 

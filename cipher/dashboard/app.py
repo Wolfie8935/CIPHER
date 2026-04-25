@@ -62,31 +62,6 @@ DARK = {
     "paper_bg":     "#111827",
 }
 
-LIGHT = {
-    "bg":           "#f0f4f8",
-    "surface":      "#ffffff",
-    "surface2":     "#e9eef6",
-    "border":       "#cbd5e1",
-    "text":         "#0f172a",
-    "text_dim":     "#64748b",
-    "text_muted":   "#94a3b8",
-    "red":          "#dc2626",
-    "red_dim":      "#fca5a5",
-    "blue":         "#2563eb",
-    "blue_dim":     "#bfdbfe",
-    "yellow":       "#d97706",
-    "purple":       "#7c3aed",
-    "green":        "#16a34a",
-    "gray":         "#9ca3af",
-    "zone0":        "#9ca3af",
-    "zone1":        "#3b82f6",
-    "zone2":        "#f59e0b",
-    "zone3":        "#ef4444",
-    "plotly_tmpl":  "plotly_white",
-    "plot_bg":      "#ffffff",
-    "paper_bg":     "#ffffff",
-}
-
 ZONE_LABELS = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical"}
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -112,40 +87,57 @@ def load_episode(path: str) -> dict:
 
 def extract_timeline(data: dict) -> tuple[list, list, list]:
     """Return (steps, red_suspicion, blue_confidence) lists."""
-    steps, red_vals, blue_vals = [], [], []
+    def _extract_numeric(entry: dict, keys: tuple[str, ...]) -> float | None:
+        for key in keys:
+            v = entry.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+        st = entry.get("state", {})
+        if isinstance(st, dict):
+            for key in keys:
+                v = st.get(key)
+                if isinstance(v, (int, float)):
+                    return float(v)
+        return None
+
+    # Primary path: aggregate per-step metrics from any entry in that step.
+    by_step: dict[int, dict[str, float | None]] = {}
     saw_signal = False
     for entry in data.get("episode_log", []):
-        step = entry.get("step", entry.get("t", None))
-        if step is None:
+        step_raw = entry.get("step", entry.get("t", None))
+        if step_raw is None:
             continue
-        has_red = any(
-            k in entry
-            for k in ("red_suspicion_score", "red_suspicion", "suspicion_score")
-        ) or ("state" in entry and "red_suspicion_score" in entry.get("state", {}))
-        has_blue = any(
-            k in entry
-            for k in ("blue_detection_confidence", "blue_confidence", "detection_confidence")
-        ) or ("state" in entry and "blue_detection_confidence" in entry.get("state", {}))
-        saw_signal = saw_signal or has_red or has_blue
-        red_s = (
-            entry.get("red_suspicion_score")
-            or entry.get("red_suspicion")
-            or entry.get("suspicion_score")
-            or entry.get("state", {}).get("red_suspicion_score")
-            or 0.0
-        )
-        blue_c = (
-            entry.get("blue_detection_confidence")
-            or entry.get("blue_confidence")
-            or entry.get("detection_confidence")
-            or entry.get("state", {}).get("blue_detection_confidence")
-            or 0.0
-        )
-        steps.append(step)
-        red_vals.append(float(red_s))
-        blue_vals.append(float(blue_c))
-    if steps and saw_signal:
+        try:
+            step = int(step_raw)
+        except Exception:
+            continue
+        slot = by_step.setdefault(step, {"red": None, "blue": None})
+        red_v = _extract_numeric(entry, ("red_suspicion_score", "red_suspicion", "suspicion_score"))
+        blue_v = _extract_numeric(entry, ("blue_detection_confidence", "blue_confidence", "detection_confidence"))
+        if red_v is not None:
+            slot["red"] = red_v
+            saw_signal = True
+        if blue_v is not None:
+            slot["blue"] = blue_v
+            saw_signal = True
+
+    if by_step and saw_signal:
+        steps = sorted(by_step.keys())
+        red_vals: list[float] = []
+        blue_vals: list[float] = []
+        red_last = 0.0
+        blue_last = 0.0
+        for st in steps:
+            red_here = by_step[st]["red"]
+            blue_here = by_step[st]["blue"]
+            if red_here is not None:
+                red_last = float(red_here)
+            if blue_here is not None:
+                blue_last = float(blue_here)
+            red_vals.append(max(0.0, min(1.0, red_last)))
+            blue_vals.append(max(0.0, min(1.0, blue_last)))
         return steps, red_vals, blue_vals
+
     steps, red_vals, blue_vals = [], [], []
 
     # Fallback schema: per-step action logs + aggregate traces.
@@ -556,7 +548,27 @@ def build_network_figure(data: dict, step: int, C: dict) -> go.Figure:
         if not path_up_to and red_path:
             path_up_to = [red_path[0]]
     else:
-        path_up_to = red_path[: step + 1] if step < len(red_path) else red_path
+        # Extract RED positions from episode_log successful move actions, step-filtered
+        direct_path = []
+        _seen_move_steps: set = set()
+        for entry in sorted(data.get("episode_log", []), key=lambda e: int(e.get("step", 0))):
+            ep_step = int(entry.get("step", 0))
+            if ep_step > step:
+                break
+            if (entry.get("action_type") == "move"
+                    and str(entry.get("agent_id", "")).startswith("red_")
+                    and entry.get("result", {}).get("success")
+                    and ep_step not in _seen_move_steps):
+                tgt = (entry.get("payload") or {}).get("target_node")
+                if tgt is not None:
+                    direct_path.append(int(tgt))
+                    _seen_move_steps.add(ep_step)
+        if direct_path:
+            path_up_to = direct_path
+        elif red_path:
+            path_up_to = red_path[: step + 1] if step < len(red_path) else red_path
+        else:
+            path_up_to = []
     red_current = path_up_to[-1] if path_up_to else None
     red_visited = set(path_up_to)
     forensics_path = extract_forensics_path(data)
@@ -883,13 +895,20 @@ def build_timeline_figure(
     shapes.append(dict(
         type="line", x0=0, x1=max(steps) if steps else 1,
         y0=0.8, y1=0.8,
-        line=dict(color=C["red_dim"], width=1.5, dash="dot"),
+        line=dict(color=C["red_dim"], width=1.8, dash="dot"),
     ))
     annotations.append(dict(
-        x=max(steps) if steps else 1, y=0.82,
-        text="⚠ Detection Threshold",
-        font=dict(size=9, color=C["red_dim"]),
-        showarrow=False, xanchor="right",
+        x=max(steps) if steps else 1, y=0.835,
+        text="Detection threshold 0.80",
+        font=dict(size=10, color=C["text_dim"], family="'Inter', sans-serif"),
+        showarrow=False,
+        xanchor="right",
+        yanchor="bottom",
+        align="right",
+        bgcolor="rgba(15, 23, 42, 0.70)",
+        bordercolor=C["border"],
+        borderwidth=1,
+        borderpad=3,
     ))
 
     # MEMENTO lines
@@ -902,34 +921,43 @@ def build_timeline_figure(
         ))
         annotations.append(dict(
             x=rs, y=1.02, text="MEMENTO",
-            font=dict(size=8, color=C["purple"]),
+            font=dict(size=8, color=C["purple"], family="'JetBrains Mono', monospace"),
             showarrow=False,
+            bgcolor="rgba(15, 23, 42, 0.50)",
         ))
 
-    # Spike annotations on RED line
-    for i in range(1, len(red_vals)):
-        delta = red_vals[i] - red_vals[i - 1]
+    current_step = int(step or 0)
+    visible_points = [(s, r, b) for s, r, b in zip(steps, red_vals, blue_vals) if s <= current_step]
+    vis_steps = [p[0] for p in visible_points]
+    vis_red_vals = [p[1] for p in visible_points]
+    vis_blue_vals = [p[2] for p in visible_points]
+
+    # Spike annotations on currently visible RED segment
+    for i in range(1, len(vis_red_vals)):
+        delta = vis_red_vals[i] - vis_red_vals[i - 1]
         if delta > 0.1:
             annotations.append(dict(
-                x=steps[i], y=red_vals[i],
+                x=vis_steps[i], y=vis_red_vals[i],
                 text=f"▲{delta:.2f}",
-                font=dict(size=8, color=C["red"]),
+                font=dict(size=8, color=C["red"], family="'JetBrains Mono', monospace"),
                 showarrow=True, arrowhead=2,
-                arrowcolor=C["red"], ay=-25,
+                arrowcolor=C["red"], arrowsize=0.8, arrowwidth=1.1, ay=-20,
+                bgcolor="rgba(15, 23, 42, 0.55)",
+                borderpad=2,
             ))
 
     # Honeypot trigger annotations
     for hs in honeypot_steps:
-        if steps and hs <= max(steps):
+        if steps and hs <= current_step:
             annotations.append(dict(
                 x=hs, y=0.9, text="✅",
                 font=dict(size=12, color=C["green"]),
-                showarrow=True, arrowhead=1, arrowcolor=C["green"], ay=-18,
+                showarrow=False,
             ))
 
     # Trap event annotations
     for ts in trap_steps:
-        if steps and ts <= max(steps):
+        if steps and ts <= current_step:
             annotations.append(dict(
                 x=ts, y=0.72, text="⚡",
                 font=dict(size=11, color=C["purple"]),
@@ -937,26 +965,28 @@ def build_timeline_figure(
             ))
 
     # Step cursor
-    if steps and step < len(steps):
-        cur_x = steps[step]
+    if steps:
+        cur_x = min(current_step, max(steps))
         shapes.append(dict(
             type="line", x0=cur_x, x1=cur_x, y0=0, y1=1,
             line=dict(color=C["yellow"], width=1.5),
         ))
 
     traces = []
-    if steps:
+    if vis_steps:
         traces.append(go.Scatter(
-            x=steps, y=red_vals,
+            x=vis_steps, y=vis_red_vals,
             name="RED Suspicion", mode="lines+markers",
-            line=dict(color=C["red"], width=2),
-            marker=dict(size=4),
+            line=dict(color=C["red"], width=2.4),
+            marker=dict(size=5, symbol="circle", line=dict(width=0.8, color=C["plot_bg"])),
+            hovertemplate="<b>RED Suspicion</b><br>Step %{x}<br>Score %{y:.3f}<extra></extra>",
         ))
         traces.append(go.Scatter(
-            x=steps, y=blue_vals,
+            x=vis_steps, y=vis_blue_vals,
             name="BLUE Confidence", mode="lines+markers",
-            line=dict(color=C["blue"], width=2),
-            marker=dict(size=4),
+            line=dict(color=C["blue"], width=2.4),
+            marker=dict(size=5, symbol="circle", line=dict(width=0.8, color=C["plot_bg"])),
+            hovertemplate="<b>BLUE Confidence</b><br>Step %{x}<br>Score %{y:.3f}<extra></extra>",
         ))
     else:
         # No data: show helpful placeholder
@@ -972,16 +1002,52 @@ def build_timeline_figure(
         template=C["plotly_tmpl"],
         paper_bgcolor=C["plot_bg"],
         plot_bgcolor=C["plot_bg"],
-        margin=dict(l=40, r=10, t=10, b=30),
+        font=dict(
+            family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            size=11,
+            color=C["text"],
+        ),
+        margin=dict(l=52, r=22, t=30, b=44),
         shapes=shapes,
         annotations=annotations,
-        xaxis=dict(title="Step", range=[0, max(steps) if steps else 10]),
-        yaxis=dict(title="Score", range=[0, 1.1]),
+        xaxis=dict(
+            title=dict(text="Step", standoff=8),
+            range=[0, max(steps) if steps else 10],
+            tickfont=dict(size=10, color=C["text_dim"]),
+            titlefont=dict(size=11, color=C["text"]),
+            gridcolor="rgba(148, 163, 184, 0.16)",
+            zeroline=False,
+            automargin=True,
+        ),
+        yaxis=dict(
+            title=dict(text="Score", standoff=8),
+            range=[0, 1.1],
+            tickfont=dict(size=10, color=C["text_dim"]),
+            titlefont=dict(size=11, color=C["text"]),
+            gridcolor="rgba(148, 163, 184, 0.20)",
+            zeroline=False,
+            automargin=True,
+        ),
         legend=dict(
-            orientation="h", x=0, y=1.1,
-            font=dict(size=10),
+            orientation="h",
+            x=0.0,
+            xanchor="left",
+            y=1.16,
+            yanchor="top",
+            font=dict(size=10, color=C["text"]),
+            bgcolor="rgba(15, 23, 42, 0.72)",
+            bordercolor=C["border"],
+            borderwidth=1,
+            traceorder="normal",
+            itemsizing="constant",
+            itemwidth=36,
         ),
         hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="rgba(15, 23, 42, 0.95)",
+            bordercolor=C["border"],
+            font=dict(size=10, color=C["text"]),
+        ),
     )
     return fig
 
@@ -1107,7 +1173,6 @@ app = dash.Dash(
     title="CIPHER · Episode Replay",
 )
 server = app.server
-register_live_callbacks(app)
 
 # ── Initial dark theme colours (client-side toggle switches between DARK/LIGHT)
 C_INIT = DARK
@@ -1179,7 +1244,6 @@ def make_layout():
 
     return html.Div([
         # ── Hidden stores
-        dcc.Store(id="theme-store", data="dark"),
         dcc.Store(id="episode-data-store", data={}),
         dcc.Store(id="autoplay-store", data=False),
         dcc.Interval(id="autoplay-interval", interval=1200, disabled=True),
@@ -1248,20 +1312,6 @@ def make_layout():
                         "border": f"1px solid {C['border']}",
                         "borderRadius": "4px",
                         "padding": "4px 10px",
-                    },
-                ),
-                # Theme toggle
-                html.Button(
-                    "☀ LIGHT", id="theme-toggle",
-                    style={
-                        "fontSize": "10px",
-                        "fontFamily": "'JetBrains Mono', monospace",
-                        "background": "transparent",
-                        "color": C["text_dim"],
-                        "border": f"1px solid {C['border']}",
-                        "borderRadius": "4px",
-                        "padding": "4px 10px",
-                        "cursor": "pointer",
                     },
                 ),
             ], style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap", "justifyContent": "flex-end"}),
@@ -1409,19 +1459,23 @@ def make_layout():
                 panel("EPISODE SUMMARY", [
                     html.Div(id="summary-outcome", style={
                         "fontFamily": "'JetBrains Mono', monospace",
-                        "fontSize": "18px",
+                        "fontSize": "15px",
                         "fontWeight": "700",
                         "textAlign": "center",
-                        "padding": "8px",
+                        "padding": "9px 12px",
                         "border": f"1px solid {C['border']}",
-                        "borderRadius": "6px",
-                        "marginBottom": "6px",
-                        "letterSpacing": "0.1em",
+                        "borderRadius": "10px",
+                        "marginBottom": "10px",
+                        "letterSpacing": "0.12em",
+                        "textTransform": "uppercase",
+                        "background": "linear-gradient(180deg, rgba(24,30,44,0.88), rgba(16,20,30,0.94))",
+                        "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.05), 0 6px 14px rgba(0,0,0,0.26)",
                     }),
                     html.Div(id="summary-stats", style={
+                        "display": "grid",
+                        "gridTemplateColumns": "1fr 1fr",
+                        "gap": "8px",
                         "fontFamily": "'JetBrains Mono', monospace",
-                        "fontSize": "11px",
-                        "lineHeight": "1.8",
                         "color": C["text"],
                     }),
                 ], C, {"minHeight": "180px"}),
@@ -1487,37 +1541,44 @@ def make_layout():
                     html.Button(
                         "⏮", id="btn-first",
                         title="Jump to start",
+                        className="replay-ctrl-btn replay-ctrl-btn--icon",
                         style=_ctrl_btn_style(C),
                     ),
                     html.Button(
                         "⏪", id="btn-prev",
                         title="Step back",
+                        className="replay-ctrl-btn replay-ctrl-btn--icon",
                         style=_ctrl_btn_style(C),
                     ),
                     html.Button(
                         "▶ PLAY", id="btn-autoplay",
+                        className="replay-ctrl-btn replay-ctrl-btn--play",
                         style={**_ctrl_btn_style(C), "color": C["green"],
-                               "border": f"1px solid {C['green']}"},
+                               "border": f"1px solid {C['green']}", "minWidth": "96px"},
                     ),
                     html.Button(
                         "⏩", id="btn-next",
                         title="Step forward",
+                        className="replay-ctrl-btn replay-ctrl-btn--icon",
                         style=_ctrl_btn_style(C),
                     ),
                     html.Button(
                         "⏭", id="btn-last",
                         title="Jump to end",
+                        className="replay-ctrl-btn replay-ctrl-btn--icon",
                         style=_ctrl_btn_style(C),
                     ),
                     html.Button(
                         "↺ RESET", id="btn-jump-reset",
                         title="Jump to next context reset",
-                        style={**_ctrl_btn_style(C), "color": C["purple"], "border": f"1px solid {C['purple']}"},
+                        className="replay-ctrl-btn replay-ctrl-btn--reset",
+                        style={**_ctrl_btn_style(C), "color": C["purple"], "border": f"1px solid {C['purple']}", "minWidth": "96px"},
                     ),
                     html.Button(
                         "⚡ TRAP", id="btn-jump-trap",
                         title="Jump to next trap event",
-                        style={**_ctrl_btn_style(C), "color": C["yellow"], "border": f"1px solid {C['yellow']}"},
+                        className="replay-ctrl-btn replay-ctrl-btn--trap",
+                        style={**_ctrl_btn_style(C), "color": C["yellow"], "border": f"1px solid {C['yellow']}", "minWidth": "88px"},
                     ),
                     html.Div(
                         dcc.Slider(
@@ -1528,11 +1589,13 @@ def make_layout():
                             updatemode="drag",
                             className="slider-container",
                         ),
+                        className="replay-slider-wrap",
                         style={"flex": "1", "minWidth": "260px"},
                     ),
                     html.Div(
                         "STEP 0 of 0",
                         id="step-label",
+                        className="replay-step-label",
                         style={
                             "fontFamily": "'JetBrains Mono', monospace",
                             "fontSize": "12px",
@@ -1566,22 +1629,24 @@ def make_layout():
                             "fontSize": "11px",
                             "fontWeight": "600",
                             "fontFamily": "'JetBrains Mono', monospace",
-                            "backgroundColor": "#f8fafc",
-                            "color": "#0f172a",
-                            "border": "1px solid #94a3b8",
-                            "borderRadius": "4px",
+                            "backgroundColor": "#0b1220",
+                            "color": "#dbe6ff",
+                            "border": "1px solid #32445f",
+                            "borderRadius": "6px",
                             "flexShrink": "0",
                         },
                     ),
                     html.Button(
                         "📤 Export HTML Report", id="btn-export-html",
                         title="Export replay as shareable standalone HTML file",
+                        className="replay-ctrl-btn replay-ctrl-btn--export",
                         style={**_ctrl_btn_style(C), "fontSize": "10px",
                                "color": C["green"], "border": f"1px solid {C['green']}",
-                               "fontWeight": "700"},
+                               "fontWeight": "700", "minWidth": "168px"},
                     ),
                     html.Div(
                         id="export-status",
+                        className="replay-export-status",
                         style={
                             "fontFamily": "'JetBrains Mono', monospace",
                             "fontSize": "9px",
@@ -1597,7 +1662,7 @@ def make_layout():
                     "background": C["surface"],
                     "border": f"1px solid {C['border']}",
                     "borderRadius": "8px",
-                }),
+                }, className="replay-controls-shell"),
 
             ], style={
                 "display": "flex",
@@ -1641,10 +1706,10 @@ def make_layout():
                         style={
                             "fontFamily": "'JetBrains Mono', monospace",
                             "fontSize": "10px",
-                            "lineHeight": "1.6",
+                            "lineHeight": "1.55",
                             "flex": "1",
                             "background": C["bg"],
-                            "borderRadius": "4px",
+                            "borderRadius": "6px",
                             "padding": "8px",
                             "minHeight": "500px",
                         },
@@ -1825,14 +1890,25 @@ def _ctrl_btn_style(C):
         "background": C["surface2"],
         "color": C["text"],
         "border": f"1px solid {C['border']}",
-        "borderRadius": "4px",
-        "padding": "5px 10px",
+        "borderRadius": "6px",
+        "padding": "0 10px",
+        "minHeight": "34px",
+        "lineHeight": "1",
+        "display": "inline-flex",
+        "alignItems": "center",
+        "justifyContent": "center",
+        "fontWeight": "700",
+        "letterSpacing": "0.04em",
         "cursor": "pointer",
         "whiteSpace": "nowrap",
+        "transition": "all 0.16s ease",
     }
 
 
 app.layout = make_unified_layout
+
+# Register live-tab callbacks exactly once on this app instance.
+register_live_callbacks(app)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2017,16 +2093,14 @@ def update_step_label(step, max_step):
     State("episode-dropdown", "value"),
     State("episode-data-store", "data"),
     State("step-slider", "value"),
-    State("theme-store", "data"),
     prevent_initial_call=True,
 )
-def export_current_replay(n_clicks, trace_path, data, step, theme):
+def export_current_replay(n_clicks, trace_path, data, step):
     if not trace_path or not data or "_error" in data:
         return "No episode to export.", no_update
     try:
-        C = DARK if theme == "dark" else LIGHT
-        net_fig = build_network_figure(data, step or 0, C)
-        tl_fig = build_timeline_figure(data, step or 0, C)
+        net_fig = build_network_figure(data, step or 0, DARK)
+        tl_fig = build_timeline_figure(data, step or 0, DARK)
         out_path = export_replay_html(
             trace_path=trace_path,
             network_fig=net_fig,
@@ -2056,11 +2130,10 @@ def export_current_replay(n_clicks, trace_path, data, step, theme):
     Output("action-log", "children"),
     Input("step-slider", "value"),
     Input("episode-data-store", "data"),
-    Input("theme-store", "data"),
     Input("log-filter-team", "value"),
 )
-def update_all_panels(step, data, theme, log_filter):
-    C = DARK if theme == "dark" else LIGHT
+def update_all_panels(step, data, log_filter):
+    C = DARK
     step = step or 0
 
     if not data or "_error" in data:
@@ -2079,8 +2152,10 @@ def update_all_panels(step, data, theme, log_filter):
             empty_fig, empty_fig, empty_fig,
             "", "NO EPISODE",
             {"color": C["text_dim"], "fontFamily": "'JetBrains Mono', monospace",
-             "fontSize": "18px", "fontWeight": "700", "textAlign": "center",
-             "padding": "8px", "border": f"1px solid {C['border']}", "borderRadius": "6px"},
+             "fontSize": "15px", "fontWeight": "700", "textAlign": "center",
+             "padding": "9px 12px", "border": f"1px solid {C['border']}", "borderRadius": "10px",
+             "letterSpacing": "0.12em", "textTransform": "uppercase",
+             "background": "linear-gradient(180deg, rgba(24,30,44,0.88), rgba(16,20,30,0.94))"},
             "", html.Div("No episode loaded.", style={"color": C["text_dim"]}),
             html.Div("No episode loaded.", style={"color": C["text_dim"]}),
         )
@@ -2109,52 +2184,88 @@ def update_all_panels(step, data, theme, log_filter):
     outcome_style = {
         "color": oc,
         "fontFamily": "'JetBrains Mono', monospace",
-        "fontSize": "18px",
+        "fontSize": "15px",
         "fontWeight": "700",
         "textAlign": "center",
-        "padding": "8px",
-        "border": f"2px solid {oc}",
-        "borderRadius": "6px",
-        "letterSpacing": "0.1em",
+        "padding": "9px 12px",
+        "border": f"1px solid {oc}",
+        "borderRadius": "10px",
+        "letterSpacing": "0.12em",
+        "textTransform": "uppercase",
+        "background": f"linear-gradient(180deg, {oc}20, rgba(16,20,30,0.94))",
+        "boxShadow": f"inset 0 0 0 1px {oc}33, 0 8px 18px rgba(0,0,0,0.30)",
     }
 
     oversight_text = ", ".join(str(o) for o in summary["oversight"]) if summary["oversight"] else "none"
     trap_count = len(extract_trap_steps(data))
+    metric_card_style = {
+        "padding": "9px 10px",
+        "border": f"1px solid {C['border']}",
+        "borderRadius": "8px",
+        "background": "linear-gradient(180deg, rgba(30,36,52,0.52), rgba(20,24,36,0.72))",
+        "display": "flex",
+        "alignItems": "baseline",
+        "justifyContent": "space-between",
+        "gap": "8px",
+    }
+    metric_label_style = {
+        "color": C["text_dim"],
+        "fontSize": "9px",
+        "letterSpacing": "0.08em",
+        "textTransform": "uppercase",
+    }
+    metric_value_style = {
+        "fontSize": "14px",
+        "fontWeight": "700",
+        "letterSpacing": "0.04em",
+    }
     stats = [
         html.Div([
-            html.Span("Steps:          ", style={"color": C["text_dim"]}),
-            html.Span(f"{summary['steps']} / {summary['max_steps']}"),
-        ]),
+            html.Span("Steps", style=metric_label_style),
+            html.Span(f"{summary['steps']} / {summary['max_steps']}", style={**metric_value_style, "color": C["text"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("RED Reward:     ", style={"color": C["text_dim"]}),
-            html.Span(f"{red_total:+.3f}", style={"color": C["red"]}),
-        ]),
+            html.Span("Complexity", style=metric_label_style),
+            html.Span(f"{summary['complexity']:.2f}x", style={**metric_value_style, "color": C["green"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("BLUE Reward:    ", style={"color": C["text_dim"]}),
-            html.Span(f"{blue_total:+.3f}", style={"color": C["blue"]}),
-        ]),
-        html.Br(),
+            html.Span("RED Reward", style=metric_label_style),
+            html.Span(f"{red_total:+.3f}", style={**metric_value_style, "color": C["red"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("Context Resets: ", style={"color": C["text_dim"]}),
-            html.Span(str(summary["resets"]), style={"color": C["purple"]}),
-        ]),
+            html.Span("BLUE Reward", style=metric_label_style),
+            html.Span(f"{blue_total:+.3f}", style={**metric_value_style, "color": C["blue"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("Dead Drops:     ", style={"color": C["text_dim"]}),
-            html.Span(str(summary["dead_drops"]), style={"color": C["yellow"]}),
-        ]),
+            html.Span("Context Resets", style=metric_label_style),
+            html.Span(str(summary["resets"]), style={**metric_value_style, "color": C["purple"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("Trap Events:    ", style={"color": C["text_dim"]}),
-            html.Span(str(trap_count), style={"color": C["purple"]}),
-        ]),
+            html.Span("Dead Drops", style=metric_label_style),
+            html.Span(str(summary["dead_drops"]), style={**metric_value_style, "color": C["yellow"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("Complexity:     ", style={"color": C["text_dim"]}),
-            html.Span(f"{summary['complexity']:.2f}x", style={"color": C["green"]}),
-        ]),
-        html.Br(),
+            html.Span("Trap Events", style=metric_label_style),
+            html.Span(str(trap_count), style={**metric_value_style, "color": C["purple"]}),
+        ], style=metric_card_style),
         html.Div([
-            html.Span("Oversight:      ", style={"color": C["text_dim"]}),
-            html.Span(oversight_text, style={"color": C["yellow"] if oversight_text != "none" else C["green"]}),
-        ]),
+            html.Span("Oversight", style=metric_label_style),
+            html.Span(
+                oversight_text,
+                style={
+                    "fontSize": "10px",
+                    "fontWeight": "600",
+                    "letterSpacing": "0.02em",
+                    "color": C["yellow"] if oversight_text != "none" else C["green"],
+                    "textAlign": "right",
+                    "maxWidth": "160px",
+                    "overflow": "hidden",
+                    "textOverflow": "ellipsis",
+                    "whiteSpace": "nowrap",
+                },
+                title=oversight_text,
+            ),
+        ], style=metric_card_style),
     ]
 
     # Dead drop table
@@ -2208,11 +2319,12 @@ def update_all_panels(step, data, theme, log_filter):
     for s in sorted(by_step.keys()):
         if isinstance(s, int) and s > step:
             continue  # Only show up to current step
-        log_els.append(html.Div(
-            f"── step {s:03d} ──",
-            style={"color": C["text_muted"], "margin": "6px 0 2px 0", "fontSize": "9px"},
-        ))
-        for act in by_step[s]:
+        step_actions = by_step[s]
+        step_els = [html.Div([
+            html.Span(f"STEP {s:03d}", className="action-log-step-label"),
+            html.Span(f"{len(step_actions)} event{'s' if len(step_actions) != 1 else ''}", className="action-log-step-count"),
+        ], className="action-log-step-header")]
+        for act in step_actions:
             team = act["team"]
             action_str = act["action"]
             agent = act["agent"]
@@ -2221,40 +2333,56 @@ def update_all_panels(step, data, theme, log_filter):
 
             if team == "RED":
                 color = C["red"]
-                prefix = f"[R] {agent} → {action_str}"
+                team_label = "RED"
+                action_type = "team"
+                prefix = f"{agent} → {action_str}"
                 if target:
                     prefix += f" → {target}"
             elif team == "BLUE":
                 color = C["blue"]
-                prefix = f"[B] {agent} → {action_str}"
+                team_label = "BLUE"
+                action_type = "team"
+                prefix = f"{agent} → {action_str}"
                 if target:
                     prefix += f" → {target}"
             elif "dead_drop" in action_str.lower() or "dead_drop" in str(target).lower():
                 color = C["yellow"]
+                team_label = "EVENT"
+                action_type = "event dead-drop"
                 prefix = f"📦 {action_str}"
             elif "trap" in action_str.lower() or "honeypot" in action_str.lower():
                 color = C["purple"]
+                team_label = "EVENT"
+                action_type = "event trap"
                 prefix = f"⚡ {action_str}"
             elif "context_reset" in action_str.lower() or "memento" in action_str.lower():
                 color = C["text"]
+                team_label = "SYSTEM"
+                action_type = "event reset"
                 prefix = f"══ MEMENTO RESET ══"
             else:
                 color = C["text_dim"]
+                team_label = "EVENT"
+                action_type = "event"
                 prefix = action_str
 
-            entry_els = [html.Div(prefix, style={"color": color})]
+            row_class = f"action-log-row {action_type} {team.lower() if team in ('RED', 'BLUE') else ''}".strip()
+            entry_els = [html.Div([
+                html.Span(team_label, className=f"action-log-team-badge {team.lower() if team in ('RED', 'BLUE') else 'event'}"),
+                html.Span(prefix, className="action-log-main-text", style={"color": color}),
+            ], className=row_class)]
             if reasoning and len(str(reasoning)) > 2:
                 entry_els.append(html.Div(
                     str(reasoning)[:120] + ("…" if len(str(reasoning)) > 120 else ""),
-                    style={"color": C["text_dim"], "fontStyle": "italic",
-                           "fontSize": "9px", "paddingLeft": "12px"},
+                    className="action-log-reasoning",
                 ))
-            log_els.append(html.Div(entry_els, style={"marginBottom": "2px"}))
+            step_els.append(html.Div(entry_els, className="action-log-entry"))
+        log_els.append(html.Div(step_els, className="action-log-step-group"))
 
     if not log_els:
         log_els = [html.Div(
             "No actions at this step yet.",
-            style={"color": C["text_dim"], "fontStyle": "italic"},
+            className="action-log-empty",
         )]
 
     return (
@@ -2262,53 +2390,8 @@ def update_all_panels(step, data, theme, log_filter):
         reward_totals,
         outcome, outcome_style,
         stats, dd_table,
-        html.Div(log_els),
+        html.Div(log_els, className="action-log-list"),
     )
-
-
-# ── Theme toggle
-@app.callback(
-    Output("theme-store", "data"),
-    Output("theme-toggle", "children"),
-    Output("root", "style"),
-    Output("top-bar", "style"),
-    Output("main-grid", "style"),
-    Input("theme-toggle", "n_clicks"),
-    State("theme-store", "data"),
-    prevent_initial_call=True,
-)
-def toggle_theme(n, current_theme):
-    new_theme = "light" if current_theme == "dark" else "dark"
-    C = LIGHT if new_theme == "light" else DARK
-    btn_label = "🌙 DARK" if new_theme == "light" else "☀ LIGHT"
-    root_style = {
-        "background": C["bg"],
-        "minHeight": "100vh",
-        "fontFamily": "'Inter', sans-serif",
-        "color": C["text"],
-    }
-    topbar_style = {
-        "background": C["surface"],
-        "borderBottom": f"1px solid {C['border']}",
-        "padding": "12px 20px",
-        "display": "flex",
-        "alignItems": "center",
-        "gap": "30px",
-        "justifyContent": "space-between",
-        "flexWrap": "wrap",
-        "rowGap": "8px",
-    }
-    grid_style = {
-        "display": "flex",
-        "gap": "12px",
-        "padding": "12px",
-        "alignItems": "flex-start",
-        "height": "auto",
-        "minHeight": "calc(100vh - 120px)",
-        "overflowX": "auto",
-        "overflowY": "auto",
-    }
-    return new_theme, btn_label, root_style, topbar_style, grid_style
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2336,7 +2419,7 @@ class CipherDashboard:
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
-register_live_callbacks(app)
-
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8050)
+    # Keep replay UI stable in normal runs: disable Dash devtools overlay
+    # ("Errors/Callbacks" panel) and reloader side effects.
+    app.run(debug=False, host="0.0.0.0", port=8050, use_reloader=False)
