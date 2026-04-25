@@ -360,4 +360,24 @@ body {
   box-shadow: 0 0 12px rgba(255,34,68,0.4);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   G.md — QUICK START pulse (first-load hint for judges)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes cipher-quick-start-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.5));
+  }
+  50% {
+    opacity: 0.72;
+    filter: drop-shadow(0 0 2px rgba(34, 197, 94, 0.2));
+  }
+}
+
+.cipher-quick-start-badge {
+  animation: cipher-quick-start-pulse 2s ease-in-out infinite;
+  display: inline-block;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
