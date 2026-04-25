@@ -1334,7 +1334,7 @@ def make_layout():
                     html.Span("OVERSIGHT VERDICT ", style={"color": "#22c55e", "fontWeight": "700"}),
                     html.Span("AI judge: red_dominates / blue_dominates / contested", style={"color": C["text_dim"]}),
                 ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
-            ], style={
+                ], style={
                 "display": "grid",
                 "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))",
                 "gap": "4px 16px",
@@ -1342,6 +1342,22 @@ def make_layout():
                 "fontFamily": "'JetBrains Mono', monospace",
                 "lineHeight": "1.8",
             }),
+            html.Div(
+                "▶ QUICK START — click PLAY to scrub the replay",
+                className="cipher-quick-start-badge",
+                style={
+                    "marginTop": "8px",
+                    "fontFamily": "'JetBrains Mono', monospace",
+                    "fontSize": "10px",
+                    "fontWeight": "700",
+                    "letterSpacing": "0.12em",
+                    "color": C["green"],
+                    "border": f"1px solid {C['green']}",
+                    "borderRadius": "4px",
+                    "padding": "6px 12px",
+                    "width": "fit-content",
+                },
+            ),
         ], style={
             "padding": "8px 14px",
             "borderBottom": f"1px solid {C['border']}",
