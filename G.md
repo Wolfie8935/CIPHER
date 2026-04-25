@@ -201,7 +201,6 @@ def export_report(n_clicks, data):
 ## Checklist
 
 - [ ] Add `--demo` flag with 3 curated showcase episodes and ASCII banner
-- [ ] Add `_auto_launch_dashboard()` to open browser automatically
 - [ ] Add `_maybe_start_dashboard_process()` to start dashboard if not running
 - [ ] Add ANSI colors to terminal output (RED for RED actions, BLUE for BLUE)
 - [ ] Add real-time timer to step ticker
