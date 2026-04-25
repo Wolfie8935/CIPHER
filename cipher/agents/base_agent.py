@@ -52,6 +52,10 @@ class ActionType(str, Enum):
     # Legacy alias — maps to PLANT_FALSE_TRAIL in parsing
     PLANT_TRAP = "plant_trap"
 
+    # LoRA specialist outputs — treated as recon/escalation for RED
+    ESCALATE_PRIVILEGES = "escalate_privileges"
+    SCAN = "scan"
+
     # ── BLUE actions ─────────────────────────────────────────────
     INVESTIGATE_NODE = "investigate_node"
     TRIGGER_ALERT = "trigger_alert"
@@ -112,6 +116,9 @@ RED_ACTIONS = {
     ActionType.PLANT_HONEYPOT_POISON,
     ActionType.WRITE_CORRUPTED_DROP,
     ActionType.PLANT_TRAP,  # Legacy alias
+    # LoRA specialist recon actions
+    ActionType.ESCALATE_PRIVILEGES,
+    ActionType.SCAN,
 }
 
 BLUE_ACTIONS = {
@@ -653,6 +660,10 @@ class BaseAgent(ABC):
             action_type = ActionType.PLANT_BREADCRUMB
         if action_type == ActionType.DEPLOY_FALSE_ESCALATION:
             action_type = ActionType.TRIGGER_FALSE_ESCALATION
+        # LoRA model outputs 'scan' — remap to ESCALATE_PRIVILEGES for RED,
+        # or ANALYZE_ANOMALY for BLUE (the closest semantic equivalent).
+        if action_type == ActionType.SCAN:
+            action_type = ActionType.ESCALATE_PRIVILEGES if self.team == "red" else ActionType.ANALYZE_ANOMALY
 
         # Validate team-action consistency
         valid_set = RED_ACTIONS if self.team == "red" else BLUE_ACTIONS

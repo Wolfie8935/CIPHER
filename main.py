@@ -534,9 +534,45 @@ def _maybe_start_dashboard_process() -> None:
 
 
 def _auto_launch_dashboard(delay: float = 4.0) -> None:
-    """Open the replay dashboard in the default browser after a short delay."""
+    """Open the replay dashboard in the default browser after a short delay.
+    Only called explicitly (e.g. --demo mode). NOT called for --live/--hybrid.
+    """
     time.sleep(delay)
     webbrowser.open("http://localhost:8050")
+
+
+def _preload_hybrid_specialists() -> None:
+    """
+    Eagerly load all 4 LoRA specialists SEQUENTIALLY before the episode loop.
+
+    Without this, models load lazily inside parallel threads at step 1, which
+    causes interleaved print output and makes it look like models didn't load.
+    Sequential pre-load also avoids OOM from 4 concurrent model.from_pretrained calls.
+    """
+    from cipher.agents.base_agent import BaseAgent
+    from cipher.utils.lora_client import LoRAClient
+
+    specialists = [
+        ("red",  "planner",       "RED_PLANNER_LORA_PATH",       "red trained/cipher-red-planner-v1"),
+        ("red",  "analyst",       "RED_ANALYST_LORA_PATH",        "red trained/cipher-red-analyst-v1"),
+        ("blue", "surveillance",  "BLUE_SURVEILLANCE_LORA_PATH",  "blue trained/cipher-blue-surveillance-v1"),
+        ("blue", "threat_hunter", "BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
+    ]
+
+    client = LoRAClient()
+    any_loaded = False
+    for team, role, env_key, default_path in specialists:
+        adapter_path = os.getenv(env_key, default_path)
+        if not os.path.exists(adapter_path):
+            continue  # Not found — will fall back to NIM at runtime
+        try:
+            client._load(adapter_path)  # No-op if already cached
+            any_loaded = True
+        except Exception as exc:
+            console.print(f"  [yellow]⚠  LoRA pre-load failed for {adapter_path}: {exc}[/yellow]")
+
+    if any_loaded:
+        console.print("  [bold green]✓ All LoRA specialists pre-loaded — ready for inference[/bold green]\n")
 
 
 def _validate_hybrid_models() -> None:
@@ -554,7 +590,6 @@ def _validate_hybrid_models() -> None:
         else:
             console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use NVIDIA NIM")
     console.print()
-
 
 
 def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
@@ -780,11 +815,9 @@ def main() -> None:
     except Exception:
         pass
 
-    # ── Auto-launch dashboard for live/hybrid ────────────────────
-    if args.live or args.hybrid:
-        _maybe_start_dashboard_process()
-        t = threading.Thread(target=_auto_launch_dashboard, args=(4.0,), daemon=True)
-        t.start()
+    # ── Auto-launch dashboard ONLY for --demo (not --live/--hybrid) ─────
+    # Use  python main.py --demo  to open the browser dashboard.
+    # Running --hybrid or --live from the terminal does NOT open a browser.
 
     if args.train:
         from cipher.training.loop import TrainingLoop
@@ -824,6 +857,12 @@ def main() -> None:
         "started_at": run_started_at,
         "last_updated": datetime.now().isoformat(),
     })
+
+    # ── Pre-load LoRA specialists (hybrid mode only) ─────────────
+    # Must happen BEFORE the episode loop so models are cached and ready.
+    # This avoids lazy loading inside parallel threads at step 1.
+    if mode == "hybrid":
+        _preload_hybrid_specialists()
 
     scenario_gen = ScenarioGenerator()
     start_time = perf_counter()

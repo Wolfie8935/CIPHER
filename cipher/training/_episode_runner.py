@@ -752,6 +752,15 @@ def _process_red_action(
         result["state_delta"]["drops_found"] = len(drops)
         result["state_delta"]["drops_valid"] = sum(1 for d in drops if d.verify())
 
+    elif action.action_type in (ActionType.ESCALATE_PRIVILEGES, ActionType.SCAN):
+        # LoRA specialist recon/escalation actions — treated as lightweight recon.
+        # Small suspicion cost; grants a privilege level bump if currently at 0.
+        state.update_suspicion(0.02)
+        if getattr(state, "red_privilege_level", 0) < 1:
+            state.red_privilege_level = 1
+        result["reason"] = "escalate_recon"
+        result["state_delta"]["escalated"] = True
+
     elif action.action_type == ActionType.WAIT:
         # Suspicion decays slightly when waiting
         state.update_suspicion(-0.02)

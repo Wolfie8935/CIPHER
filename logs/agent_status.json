@@ -1,10 +1,10 @@
 {
-  "run_id": "hybrid_20260425_021931",
+  "run_id": "hybrid_20260425_090340",
   "episode": 1,
-  "step": 1,
-  "suspicion": 0.098,
-  "detection": 0.04,
-  "zone": "General",
+  "step": 3,
+  "suspicion": 0.18,
+  "detection": 0.01,
+  "zone": "Sensitive",
   "agents": {
     "red_planner_01": {
       "action": "wait",
@@ -12,33 +12,33 @@
       "team": "red"
     },
     "red_analyst_01": {
-      "action": "move",
-      "node": 13,
+      "action": "wait",
+      "node": null,
       "team": "red"
     },
     "red_operative_01": {
       "action": "move",
-      "node": 5,
+      "node": 37,
       "team": "red"
     },
     "red_exfiltrator_01": {
       "action": "move",
-      "node": 5,
+      "node": 37,
       "team": "red"
     },
     "blue_surveillance_01": {
-      "action": "analyze_anomaly",
-      "node": 27,
+      "action": "stand_down",
+      "node": null,
       "team": "blue"
     },
     "blue_threat_hunter_01": {
-      "action": "investigate_node",
-      "node": 27,
+      "action": "stand_down",
+      "node": null,
       "team": "blue"
     },
     "blue_deception_architect_01": {
-      "action": "analyze_anomaly",
-      "node": null,
+      "action": "place_honeypot",
+      "node": 12,
       "team": "blue"
     },
     "blue_forensics_01": {
@@ -47,5 +47,5 @@
       "team": "blue"
     }
   },
-  "timestamp": "2026-04-25T02:21:16.383670"
+  "timestamp": "2026-04-25T09:11:25.909973"
 }
