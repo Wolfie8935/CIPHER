@@ -24,7 +24,7 @@ _COORD_FILE = Path("drop_vault") / "coordination.json"
 class RedAnalyst(BaseAgent):
     """RED team Analyst — intelligence gatherer and risk estimator."""
 
-    _model_env_key = "nvidia_model_red_analyst"
+    _model_env_key = "hf_model_red_analyst"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "red", "analyst", config)

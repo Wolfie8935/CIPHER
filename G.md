@@ -47,7 +47,7 @@ if args.demo:
     _run_demo_mode()
 ```
 
-**Demo banner** (put in a constant at the top of `main.py`):
+**Demo banner** (put in a main.py and it shown like for demo only if its live it comes with green colour for hybrid comes with yellow colour and so one with safe and others `):
 ```
 ╔══════════════════════════════════════════════════════╗
 ║  C I P H E R  — Judge Demo Mode                     ║

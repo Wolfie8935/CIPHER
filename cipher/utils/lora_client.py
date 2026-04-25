@@ -6,7 +6,7 @@ Loads base model (fp16/fp32) + LoRA adapter on first call per adapter path,
 then reuses cached models for subsequent calls.
 
 Used when LLM_MODE=hybrid for any agent that has a trained adapter.
-All other agents use NVIDIA NIM via llm_client.py.
+All other agents use HuggingFace Inference API via llm_client.py.
 """
 from __future__ import annotations
 

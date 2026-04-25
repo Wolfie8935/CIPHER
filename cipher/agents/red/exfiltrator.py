@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 class RedExfiltrator(BaseAgent):
     """RED team Exfiltrator — data extraction and exit specialist."""
 
-    _model_env_key = "nvidia_model_red_exfil"
+    _model_env_key = "hf_model_red_exfil"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "red", "exfiltrator", config)

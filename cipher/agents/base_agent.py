@@ -178,7 +178,7 @@ class BaseAgent(ABC):
     """
 
     # Subclasses MUST override this with the config attribute name
-    # e.g. "nvidia_model_red_planner"
+    # e.g. "hf_model_red_planner"
     _model_env_key: str = ""
 
     def __init__(
@@ -228,9 +228,9 @@ class BaseAgent(ABC):
 
         Mode routing:
           stub   → _stub_act()  (random/heuristic, no API calls)
-          live   → _act_live()  (NVIDIA NIM for all 8 agents)
+          live   → _act_live()  (HuggingFace Inference API for all 8 agents)
           hybrid → _act_lora()  for RED Planner specialist
-                   _act_live()  for all other 7 agents (NVIDIA NIM)
+                   _act_live()  for all other 7 agents (HuggingFace API)
 
         Returns:
             An Action object representing the agent's decision.
@@ -299,7 +299,7 @@ class BaseAgent(ABC):
 
     def _act_live(self) -> Action:
         """
-        LLM-backed action selection via NVIDIA NIM API.
+        LLM-backed action selection via HuggingFace Inference API.
         Constructs prompt, calls LLM, parses response.
         Used by all 8 agents in live mode; used by 7 non-specialist agents in hybrid mode.
         """
@@ -340,7 +340,7 @@ class BaseAgent(ABC):
         Fine-tuned LoRA specialist inference for hybrid mode.
 
         Resolves the correct adapter path for whichever specialist this agent is,
-        then calls the LoRA client. Falls back to NVIDIA NIM on any loading error.
+        then calls the LoRA client. Falls back to HF API on any loading error.
         """
         key = (self.team, self.role)
         env_key, default_path = self._LORA_PATH_MAP.get(key, ("", ""))
@@ -359,9 +359,9 @@ class BaseAgent(ABC):
             logger.info(f"[LoRA] {self.agent_id} response: {response_text[:80]}...")
         except Exception as exc:
             logger.warning(
-                f"[LoRA] {self.agent_id} LoRA failed ({exc}). Falling back to NVIDIA NIM."
+                f"[LoRA] {self.agent_id} LoRA failed ({exc}). Falling back to HF API."
             )
-            return self._act_live_nvidia_direct()
+            return self._act_live_hf_direct()
 
         action = self._parse_action_from_response(response_text)
         self._last_reasoning = action.reasoning
@@ -373,13 +373,13 @@ class BaseAgent(ABC):
 
         return action
 
-    def _act_live_nvidia_direct(self) -> Action:
+    def _act_live_hf_direct(self) -> Action:
         """
-        Call NVIDIA NIM directly, bypassing hybrid local routing.
+        Call HuggingFace API directly, bypassing hybrid local routing.
 
         Used when the LoRA specialist is unavailable (e.g. torch not installed).
         Temporarily removes the RED Planner key from _LOCAL_KEYS_IN_HYBRID so
-        _resolve() routes to the NVIDIA client instead of localhost.
+        _resolve() routes to the HF API instead of localhost.
         """
         from cipher.utils.llm_client import get_llm_client, _LOCAL_KEYS_IN_HYBRID
 
@@ -387,7 +387,7 @@ class BaseAgent(ABC):
         client = get_llm_client()
 
         # Temporarily pull the planner key out of hybrid routing so it goes
-        # to NVIDIA NIM instead of the unavailable local server.
+        # to HF API instead of the unavailable local server.
         key = self._model_env_key
         was_in_hybrid = key in _LOCAL_KEYS_IN_HYBRID
         if was_in_hybrid:

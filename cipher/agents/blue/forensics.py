@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 class BlueForensics(BaseAgent):
     """BLUE team Forensics — operation graph reconstructor."""
 
-    _model_env_key = "nvidia_model_blue_forensics"
+    _model_env_key = "hf_model_blue_forensics"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "blue", "forensics", config)

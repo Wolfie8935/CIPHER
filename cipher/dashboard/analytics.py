@@ -97,7 +97,7 @@ def _expected_score(rating_a: float, rating_b: float) -> float:
 
 def compute_elo(
     df: pd.DataFrame | None = None,
-    team_a_label: str = "RED (NIM)",
+    team_a_label: str = "RED (HF)",
     team_b_label: str = "BLUE (Defender)",
 ) -> dict[str, Any]:
     """

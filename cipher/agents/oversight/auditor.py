@@ -76,7 +76,7 @@ class OversightAuditor(BaseAgent):
     AGENT_ID = "oversight_auditor_01"
     ROLE = "oversight"
     TEAM = "oversight"
-    _model_env_key = "nvidia_model_oversight"
+    _model_env_key = "hf_model_oversight"
 
     SYSTEM_PROMPT = """You are the Fleet Oversight AI for CIPHER, an adversarial
 multi-agent security simulation. You observe complete episode traces for both

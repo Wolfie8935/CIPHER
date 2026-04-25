@@ -11,10 +11,12 @@ Usage:
   python main.py                          # 1 episode, stub mode
   python main.py --episodes 5            # 5-episode competition
   python main.py --steps 30              # longer episodes
-  python main.py --live                  # all agents use NVIDIA NIM
+  python main.py --live                  # all agents use HuggingFace API
   python main.py --hybrid                # RED Planner uses trained LoRA
   python main.py --train                 # training loop (10 episodes)
   python main.py --debug                 # show all agent debug logs
+  python main.py --demo                  # 3 judge episodes (stub / from .env)
+  python main.py --demo --live           # same + green banner + HF agents
 """
 from __future__ import annotations
 
@@ -59,19 +61,93 @@ console = Console(force_terminal=True)
 ZONE_NAMES = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical (HVT)"}
 ZONE_COLORS = {0: "dim white", 1: "cyan", 2: "yellow", 3: "bold red"}
 
-# ── Demo mode ASCII banner ────────────────────────────────────────
-DEMO_BANNER = """\033[91m
-╔══════════════════════════════════════════════════════════════╗
-║  C I P H E R  ·  J U D G E   D E M O   M O D E             ║
-║  OpenEnv Hackathon  |  Multi-Agent Adversarial RL            ║
-╠══════════════════════════════════════════════════════════════╣
-║  \033[93mEp 1\033[91m: RED Exfiltration — fast breach showcase             ║
-║  \033[94mEp 2\033[91m: BLUE Honeypot Trap — defensive mechanics            ║
-║  \033[92mEp 3\033[91m: Contested — 8 LLMs in tense back-and-forth battle   ║
-╠══════════════════════════════════════════════════════════════╣
-║  8 LLM agents  ·  50-node network  ·  4 security zones      ║
-╚══════════════════════════════════════════════════════════════╝\033[0m
-"""
+# ── G.md — Judge demo + session + eval banners (56-char ║ rows) ───
+_BOX_INNER = 54  # characters between ║ and ║
+_RST = "\033[0m"
+
+
+def _ansi_framed_row(border: str, inner: str) -> str:
+    inner = inner.replace("\n", " ")[:_BOX_INNER].ljust(_BOX_INNER)
+    return f"{border}║{_RST}{inner}{border}║{_RST}"
+
+
+def _ansi_framed_cap(border: str, cap: str) -> str:
+    return f"{border}{cap}{_RST}"
+
+
+def judge_demo_banner_ansi(llm_mode: str) -> str:
+    """
+    G.md (51–59) judge box. Border is always red (--demo). Footer line follows
+    LLM mode (live / hybrid / stub).
+    """
+    border = "\033[91m"  # demo = red frame
+    top = "╔" + "═" * _BOX_INNER + "╗"
+    sep = "╠" + "═" * _BOX_INNER + "╣"
+    bot = "╚" + "═" * _BOX_INNER + "╝"
+    footer = {
+        "live": "  8 LLM agents · 50-node network · Live inference     ",
+        "hybrid": "  8 LLM agents · 50-node network · Hybrid LoRA + API  ",
+        "stub": "  8 LLM agents · 50-node network · Stub policies      ",
+    }.get(llm_mode, "  8 LLM agents · 50-node network · Stub policies      ")
+    footer = footer[:_BOX_INNER].ljust(_BOX_INNER)
+    lines = [
+        _ansi_framed_cap(border, top),
+        _ansi_framed_row(border, "  C I P H E R  — Judge Demo Mode                      "),
+        _ansi_framed_row(border, "  OpenEnv Hackathon | Multi-Agent Adversarial RL      "),
+        _ansi_framed_cap(border, sep),
+        _ansi_framed_row(border, "  3 episodes: Exfiltration · Detection · Contested    "),
+        _ansi_framed_row(border, footer),
+        _ansi_framed_cap(border, bot),
+    ]
+    return "\n".join(lines)
+
+
+def session_mode_banner_ansi(mode: str) -> str:
+    """Non-demo session: stub=dark grey, live=green, hybrid=yellow borders."""
+    top = "╔" + "═" * _BOX_INNER + "╗"
+    sep = "╠" + "═" * _BOX_INNER + "╣"
+    bot = "╚" + "═" * _BOX_INNER + "╝"
+    if mode == "live":
+        border = "\033[92m"
+        title = "L I V E   I N F E R E N C E"
+        sub = "  All 8 agents · HuggingFace API · traces → :8050   "
+    elif mode == "hybrid":
+        border = "\033[93m"
+        title = "H Y B R I D   M O D E"
+        sub = "  RED LoRA + HF API · BLUE API · Dash replay :8050 "
+    else:
+        border = "\033[90m"  # dark grey
+        title = "S T U B   ( S A F E   /   F A S T )"
+        sub = "  Heuristics · $0 API · use --demo or --live judges "
+    row_title = f"  C I P H E R  — {title}".ljust(_BOX_INNER)[:_BOX_INNER]
+    row_sub = sub[:_BOX_INNER].ljust(_BOX_INNER)
+    lines = [
+        _ansi_framed_cap(border, top),
+        _ansi_framed_row(border, row_title),
+        _ansi_framed_cap(border, sep),
+        _ansi_framed_row(border, row_sub),
+        _ansi_framed_cap(border, bot),
+    ]
+    return "\n".join(lines)
+
+
+def eval_suite_banner_ansi(n_episodes: int) -> str:
+    """--eval: blue border (E.md evaluation suite)."""
+    border = "\033[94m"
+    top = "╔" + "═" * _BOX_INNER + "╗"
+    sep = "╠" + "═" * _BOX_INNER + "╣"
+    bot = "╚" + "═" * _BOX_INNER + "╝"
+    row3 = f"  --eval {n_episodes} · stub + hybrid · outputs below  "
+    row3 = row3[:_BOX_INNER].ljust(_BOX_INNER)
+    lines = [
+        _ansi_framed_cap(border, top),
+        _ansi_framed_row(border, "  C I P H E R  — E V A L   S U I T E   ( E . m d )    "),
+        _ansi_framed_row(border, "  Stub + hybrid · eval_results/ + proof MD (E.md)     "),
+        _ansi_framed_cap(border, sep),
+        _ansi_framed_row(border, row3),
+        _ansi_framed_cap(border, bot),
+    ]
+    return "\n".join(lines)
 
 # ── ANSI color helpers (for demo + live ticker) ───────────────────
 RED_ANSI   = "\033[91m"
@@ -120,7 +196,7 @@ def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
         red_label = "RED TEAM (Trained LoRA + 3 agents)"
         mode_badge = "[bold red]HYBRID[/bold red] — RED Planner uses fine-tuned Llama-3.2-1B"
     elif mode == "live":
-        red_label = "RED TEAM (4 × NVIDIA NIM agents)"
+        red_label = "RED TEAM (4 × HuggingFace API agents)"
         mode_badge = "[bold green]LIVE[/bold green] — All 8 agents use real LLM inference"
     else:
         red_label = "RED TEAM (4 agents, stub policy)"
@@ -189,15 +265,14 @@ def _compute_zone_stall(state: Any) -> int:
 
 def _print_live_step(step: int, max_steps: int, red_actions: list,
                      blue_actions: list, state: Any, elapsed_s: float) -> None:
-    """Print a compact, informative per-step line during live/hybrid episodes."""
-    from cipher.agents.base_agent import ActionType  # local import for safety
-
+    """ANSI step ticker for live/hybrid (G.md Change 3 — colours + timer)."""
     # Red planner's primary action
     red_emergent_intent: str = ""
     red_info = "[dim]waiting…[/dim]"
     for a in red_actions:
         if a and a.agent_id.startswith("red_planner"):
             atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+            atype_lower = str(atype).lower()
             node = f" → n{a.target_node}" if a.target_node is not None else ""
             file_ = f" [{a.target_file[:18]}]" if a.target_file else ""
             if atype == "emergent" and a.emergent_data:
@@ -231,6 +306,7 @@ def _print_live_step(step: int, max_steps: int, red_actions: list,
             zone = zone_raw.value if hasattr(zone_raw, "value") else int(zone_raw)
         except Exception:
             zone = 0
+    zone_plain = {0: "PERIMETER", 1: "GENERAL", 2: "SENSITIVE", 3: "CRITICAL/HVT"}.get(int(zone), f"Z{zone}")
 
     suspicion = float(getattr(state, "red_suspicion_score", 0.0))
     detection = float(getattr(state, "blue_detection_confidence", 0.0))
@@ -533,17 +609,7 @@ def _write_agent_status(data: dict) -> None:
         pass
 
 
-def _rename_trace(ep_num: int, mode: str) -> None:
-    """Rename episode_NNNN.json → episode_NNN_TIMESTAMP_MODE.json after saving."""
-    traces_dir = Path("episode_traces")
-    old_path = traces_dir / f"episode_{ep_num:04d}.json"
-    if old_path.exists():
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_path = traces_dir / f"episode_{ep_num:03d}_{ts}_{mode}.json"
-        try:
-            old_path.rename(new_path)
-        except Exception:
-            pass
+
 
 
 def _get_step_callback_factory(run_id: str):
@@ -634,11 +700,15 @@ def _maybe_start_dashboard_process() -> None:
 
 
 def _auto_launch_dashboard(delay: float = 4.0) -> None:
-    """Open the replay dashboard in the default browser after a short delay.
-    Only called explicitly (e.g. --demo mode). NOT called for --live/--hybrid.
-    """
+    """Open the Dash replay dashboard after a short delay (G.md Change 2)."""
     time.sleep(delay)
     webbrowser.open("http://localhost:8050")
+
+
+def _ensure_judge_dashboard(delay: float = 4.0) -> None:
+    """Spawn Dash on :8050 if needed and open browser (demo / live / hybrid)."""
+    _maybe_start_dashboard_process()
+    threading.Thread(target=_auto_launch_dashboard, args=(delay,), daemon=True).start()
 
 
 def _preload_hybrid_specialists() -> None:
@@ -664,7 +734,7 @@ def _preload_hybrid_specialists() -> None:
     for team, role, env_key, default_path in specialists:
         adapter_path = os.getenv(env_key, default_path)
         if not os.path.exists(adapter_path):
-            continue  # Not found — will fall back to NIM at runtime
+            continue  # Not found — will fall back to HF API at runtime
         try:
             client._load(adapter_path)  # No-op if already cached
             any_loaded = True
@@ -688,8 +758,22 @@ def _validate_hybrid_models() -> None:
         if os.path.exists(path):
             console.print(f"    [green]✓[/green] {name}: [dim]{path}[/dim]")
         else:
-            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use NVIDIA NIM")
+            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use HF API")
     console.print()
+
+
+def _apply_scenario_seed(scenario: Any, new_seed: int) -> None:
+    """G.md fixed seeds — regenerate graph + targets for a stable showcase topology."""
+    from cipher.environment.graph import generate_enterprise_graph
+    from cipher.utils.config import config as cfg
+
+    scenario.episode_seed = new_seed
+    scenario.target_files = [f"target_file_{new_seed}_{i:03d}" for i in range(3)]
+    scenario.generated_graph = generate_enterprise_graph(
+        n_nodes=cfg.env_graph_size,
+        honeypot_density=cfg.env_honeypot_density,
+        seed=new_seed,
+    )
 
 
 def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
@@ -701,22 +785,22 @@ def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
     Episode 3 — Contested: standard difficulty, long back-and-forth battle.
     """
     from cipher.training._episode_runner import run_episode
-    from cipher.environment.scenario import ScenarioGenerator, Scenario
+    from cipher.environment.scenario import ScenarioGenerator
     from cipher.utils.config import config
 
     mode = os.environ.get("LLM_MODE", "stub")
     run_id = os.environ.get("CIPHER_RUN_ID", f"demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
-    # Demo configurations: (episode_number, description, difficulty_override, honeypot_override)
+    # (ep, label, difficulty, honeypots, curated_seed) — G.md: fixed seeds for 3 arcs
     demo_configs = [
-        (1,  "RED EXFILTRATION SHOWCASE",  0.1, 2),   # Easy — RED wins fast
-        (2,  "BLUE HONEYPOT DEFENCE",       0.5, 12),  # Many traps — BLUE detection mechanics
-        (3,  "CONTESTED BATTLE",            0.4, 7),   # Balanced — tension + back-and-forth
+        (1, "RED EXFILTRATION SHOWCASE", 0.1, 2, 271828),
+        (2, "BLUE HONEYPOT DEFENCE", 0.5, 12, 314159),
+        (3, "CONTESTED BATTLE", 0.4, 7, 161803),
     ]
 
     scenario_gen = ScenarioGenerator()
 
-    for ep_num, demo_label, difficulty_override, hp_override in demo_configs:
+    for ep_num, demo_label, difficulty_override, hp_override, demo_seed in demo_configs:
         console.print()
         console.print(
             f"[bold yellow]{'═' * 60}[/bold yellow]\n"
@@ -727,7 +811,7 @@ def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
         console.print()
 
         scenario = scenario_gen.generate(ep_num)
-        # Override difficulty for this showcase
+        _apply_scenario_seed(scenario, demo_seed)
         scenario.difficulty = difficulty_override
         scenario.n_honeypots = hp_override
 
@@ -782,8 +866,7 @@ def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
             except Exception:
                 pass
 
-        if save_trace:
-            _rename_trace(ep_num, mode)
+
 
         _write_run_state({
             "status": "running",
@@ -829,9 +912,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=30,
                         help="Max steps per episode (default: 30)")
     parser.add_argument("--live", action="store_true",
-                        help="Use NVIDIA NIM for all agents")
+                        help="Use HuggingFace API for all agents")
     parser.add_argument("--hybrid", action="store_true",
-                        help="RED Planner uses trained LoRA, others use NIM")
+                        help="RED Planner uses trained LoRA, others use HF API")
     parser.add_argument("--train", action="store_true",
                         help="Run training loop (updates prompts every 5 episodes)")
     parser.add_argument("--train-episodes", type=int, default=10,
@@ -845,7 +928,8 @@ def main() -> None:
     parser.add_argument("--video", action="store_true",
                         help="Generate CIPHER Cinema video highlights after each episode")
     parser.add_argument("--demo", action="store_true",
-                        help="Run 3 curated showcase episodes for judge demo (auto-launches dashboard)")
+                        help="Run 3 curated judge episodes; red banner frame; footer reflects "
+                             "LLM mode (--live / --hybrid / stub). Auto-launches dashboard.")
     # E.md Change 5 — evaluation flag
     parser.add_argument(
         "--eval", type=int, default=0, metavar="N",
@@ -855,16 +939,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Set LLM mode
+    # So .env / shell LLM_MODE matches banner + episodes (was: mode stuck "stub" if flags omitted)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+    except Exception:
+        pass
+
     if args.live:
-        os.environ["LLM_MODE"] = "live"
         mode = "live"
     elif args.hybrid:
-        os.environ["LLM_MODE"] = "hybrid"
         mode = "hybrid"
     else:
         os.environ.setdefault("LLM_MODE", "stub")
-        mode = "stub"
+        _m = os.environ.get("LLM_MODE", "stub").strip().lower()
+        mode = _m if _m in ("live", "hybrid", "stub") else "stub"
+    os.environ["LLM_MODE"] = mode
 
     # Change 11: validate specialist model paths when running hybrid
     if mode == "hybrid":
@@ -877,10 +967,11 @@ def main() -> None:
 
     # ── E.md Change 5 — --eval flag ──────────────────────────────
     if args.eval > 0:
-        console.print(
-            f"\n[bold cyan]CIPHER Evaluation Suite[/bold cyan] — "
-            f"[yellow]{args.eval}[/yellow] episodes × [yellow]stub + hybrid[/yellow] modes\n"
-        )
+        try:
+            console.print(Text.from_ansi(eval_suite_banner_ansi(args.eval)))
+        except Exception:
+            print(eval_suite_banner_ansi(args.eval), flush=True)
+        console.print()
         from cipher.training.eval_runner import run_eval, print_summary, save_results
         from cipher.utils.report_gen import generate_proof_of_learning_report, save_report
         eval_json = run_eval(
@@ -899,13 +990,13 @@ def main() -> None:
 
     # ── Demo mode ────────────────────────────────────────────────
     if args.demo:
-        print(DEMO_BANNER, flush=True)
-        console.print("[bold cyan]Starting dashboard in background…[/bold cyan]")
-        _maybe_start_dashboard_process()
-        # Open browser after 5 seconds (gives dashboard time to start)
-        t = threading.Thread(target=_auto_launch_dashboard, args=(5.0,), daemon=True)
-        t.start()
-        console.print("[dim]Dashboard will open at http://localhost:8050 in ~5s[/dim]\n")
+        # Rich renders ANSI reliably in Cursor / non-tty; raw print often shows no colour
+        try:
+            console.print(Text.from_ansi(judge_demo_banner_ansi(mode)))
+        except Exception:
+            print(judge_demo_banner_ansi(mode), flush=True)
+        console.print("[bold cyan]Starting replay dashboard + browser…[/bold cyan]")
+        _ensure_judge_dashboard(delay=4.0)
         _run_demo_mode(max_steps=args.steps, save_trace=not args.no_trace)
         return
 
@@ -915,9 +1006,42 @@ def main() -> None:
     except Exception:
         pass
 
-    # ── Auto-launch dashboard ONLY for --demo (not --live/--hybrid) ─────
-    # Use  python main.py --demo  to open the browser dashboard.
-    # Running --hybrid or --live from the terminal does NOT open a browser.
+    # Clear previous thoughts file for a clean session
+    try:
+        thoughts_path = Path("logs") / "agent_thoughts.jsonl"
+        thoughts_path.parent.mkdir(exist_ok=True)
+        thoughts_path.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+    # ── Auto-launch React War Room for --live / --hybrid ─────────────────
+    if mode in ("live", "hybrid"):
+        # Serialize initial graph topology once scenario is generated later;
+        # start the Flask API server now so the React app can connect.
+        def _run_war_room_api() -> None:
+            import importlib.util, sys as _sys
+            api_path = Path(__file__).parent / "dashboard-react" / "api_server.py"
+            if api_path.exists():
+                spec = importlib.util.spec_from_file_location("api_server", api_path)
+                mod  = importlib.util.module_from_spec(spec)
+                _sys.modules["api_server"] = mod
+                spec.loader.exec_module(mod)
+                mod.app.run(host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _s:
+            if _s.connect_ex(("localhost", 5001)) != 0:
+                threading.Thread(target=_run_war_room_api, daemon=True).start()
+                console.print("  [bold cyan]✓ War Room API started on http://localhost:5001[/bold cyan]")
+            else:
+                console.print("  [dim]War Room API already running on port 5001[/dim]")
+
+        def _open_war_room(delay: float = 2.5) -> None:
+            time.sleep(delay)
+            webbrowser.open("http://localhost:5173")
+
+        # threading.Thread(target=_open_war_room, args=(2.5,), daemon=True).start()
+        # console.print("  [bold green]✓ Opening React War Room at http://localhost:5173 in 3s…[/bold green]")
+        # console.print("  [dim]  (run: cd dashboard-react && npm run dev  — if not already started)[/dim]\n")
 
     if args.train:
         from cipher.training.loop import TrainingLoop
@@ -963,6 +1087,14 @@ def main() -> None:
     # This avoids lazy loading inside parallel threads at step 1.
     if mode == "hybrid":
         _preload_hybrid_specialists()
+
+    if mode in ("live", "hybrid"):
+        print(session_mode_banner_ansi(mode), flush=True)
+        console.print("[dim]Dash replay → http://localhost:8050 (browser opens shortly)[/dim]\n")
+        _ensure_judge_dashboard(delay=4.0)
+    elif mode == "stub":
+        print(session_mode_banner_ansi("stub"), flush=True)
+        console.print()
 
     scenario_gen = ScenarioGenerator()
     start_time = perf_counter()
@@ -1094,9 +1226,7 @@ def main() -> None:
                 except Exception as _ve:
                     console.print(f"  [dim]Video generation skipped: {_ve}[/dim]")
 
-        # Rename trace to include timestamp + mode for dashboard trace selector
-        if save_trace:
-            _rename_trace(ep_num, mode)
+
 
         # Update dashboard state after each episode
         _write_run_state({
@@ -1109,7 +1239,7 @@ def main() -> None:
             "last_updated": datetime.now().isoformat(),
         })
 
-    # Estimate API cost (OpenRouter; stub = $0)
+    # Estimate API cost (HuggingFace; stub = $0)
     total_steps_run = n_episodes * max_steps
     if mode == "live":
         # ~8 agents × ~800 tokens/call × $0.80/1M tokens (approx)
