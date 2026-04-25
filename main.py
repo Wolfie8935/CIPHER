@@ -909,8 +909,10 @@ def _preload_hybrid_specialists() -> None:
 
     client = LoRAClient()
     any_loaded = False
+    from cipher.utils.config import resolve_lora_adapter_path
+
     for team, role, env_key, default_path in specialists:
-        adapter_path = os.getenv(env_key, default_path)
+        adapter_path = resolve_lora_adapter_path(env_key, default_path)
         if not os.path.exists(adapter_path):
             continue  # Not found — will fall back to HF API at runtime
         try:
@@ -925,13 +927,15 @@ def _preload_hybrid_specialists() -> None:
 
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
+    from cipher.utils.config import config
+
     specialists = {
-        "RED Commander":      os.getenv("RED_COMMANDER_LORA_PATH",       "red trained/cipher-red-commander-v1"),
-        "BLUE Commander":     os.getenv("BLUE_COMMANDER_LORA_PATH",      "blue trained/cipher-blue-commander-v1"),
-        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",         "red trained/cipher-red-planner-v1"),
-        "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
-        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
-        "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
+        "RED Commander": str(config.red_commander_lora_path),
+        "BLUE Commander": str(config.blue_commander_lora_path),
+        "RED Planner": str(config.red_planner_lora_path),
+        "RED Analyst": str(config.red_analyst_lora_path),
+        "BLUE Surveillance": str(config.blue_surveillance_lora_path),
+        "BLUE ThreatHunter": str(config.blue_threat_hunter_lora_path),
     }
     console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
     for name, path in specialists.items():

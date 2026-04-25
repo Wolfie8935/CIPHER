@@ -1,11 +1,16 @@
 """
 Configuration loader for CIPHER.
 
-Reads all environment variables from .env and exposes them as typed attributes.
-Every other module imports from config, never from os directly.
+``.env`` is intentionally minimal: only ``HF_TOKEN`` and ``HF_BASE_URL`` are
+expected there for Hugging Face Inference. Everything else (LLM models, LoRA
+paths, subagent caps, ``LLM_MODE`` / ``LLM_BACKEND`` defaults, etc.) lives as
+``Field`` defaults on ``CipherConfig`` below.
 
-Owns: environment variable loading, validation, and typed access.
-Does NOT own: any domain logic, file I/O beyond .env, or API calls.
+You can still override any field via process environment (Pydantic naming:
+``LLM_MODE``, ``HF_MODEL_RED_PLANNER``, …) without editing this file.
+
+Owns: typed configuration and optional ``.env`` loading.
+Does NOT own: domain logic or API calls.
 """
 from __future__ import annotations
 
@@ -41,55 +46,55 @@ class CipherConfig(BaseSettings):
     )
     llm_mode: str = Field(
         "stub",
-        description="stub (no API cost) | live (real HF calls)",
+        description="stub | live | hybrid (runtime may set LLM_MODE in os.environ)",
     )
 
-    # ── HuggingFace Inference API ─────────────────────────────────
+    # ── HuggingFace Inference API (credentials: .env only HF_TOKEN + HF_BASE_URL) ─
     hf_token: str = Field("", description="HuggingFace API token")
     hf_base_url: str = Field(
-        "https://api-inference.huggingface.co/v1/",
-        description="HuggingFace Inference API base URL",
+        "https://router.huggingface.co/v1",
+        description="HF Inference / router OpenAI-compatible base URL",
     )
 
     # ── Model assignments — RED ───────────────────────────────────
     hf_model_red_planner: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for RED Planner agent",
     )
     hf_model_red_analyst: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for RED Analyst agent",
     )
     hf_model_red_operative: str = Field(
-        "Qwen/Qwen2.5-7B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for RED Operative agent",
     )
     hf_model_red_exfil: str = Field(
-        "Qwen/Qwen2.5-7B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for RED Exfiltrator agent",
     )
 
     # ── Model assignments — BLUE ──────────────────────────────────
     hf_model_blue_surv: str = Field(
-        "Qwen/Qwen2.5-7B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for BLUE Surveillance agent",
     )
     hf_model_blue_hunter: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for BLUE Threat Hunter agent",
     )
     hf_model_blue_deceiver: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for BLUE Deception Architect agent",
     )
     hf_model_blue_forensics: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for BLUE Forensics agent",
     )
 
     # ── Oversight Auditor ─────────────────────────────────────────
     hf_model_oversight: str = Field(
-        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for Oversight Auditor agent",
     )
 
@@ -107,6 +112,48 @@ class CipherConfig(BaseSettings):
     local_model_name: str = Field(
         "cipher-red-planner",
         description="Model name as registered in local server",
+    )
+
+    # ── Hugging Face repos (uploads / demo traces) ────────────────
+    hf_repo_id: str = Field(
+        "wolfie8935/cipher-specialists",
+        description="Default HF model dataset repo for specialist uploads",
+    )
+    hf_traces_repo: str = Field(
+        "wolfie8935/cipher-traces",
+        description="HF dataset repo for optional demo episode traces",
+    )
+
+    # ── LoRA adapter paths (hybrid / local inference) ──────────────
+    red_commander_lora_path: str = Field(
+        "red trained/cipher-red-commander-v1",
+        description="RED commander LoRA directory",
+    )
+    blue_commander_lora_path: str = Field(
+        "blue trained/cipher-blue-commander-v1",
+        description="BLUE commander LoRA directory",
+    )
+    red_planner_lora_path: str = Field(
+        "red trained/cipher-red-planner-v1",
+        description="RED planner LoRA directory",
+    )
+    red_analyst_lora_path: str = Field(
+        "red trained/cipher-red-analyst-v1",
+        description="RED analyst LoRA directory",
+    )
+    blue_surveillance_lora_path: str = Field(
+        "blue trained/cipher-blue-surveillance-v1",
+        description="BLUE surveillance LoRA directory",
+    )
+    blue_threat_hunter_lora_path: str = Field(
+        "blue trained/cipher-blue-threat-hunter-v1",
+        description="BLUE threat hunter LoRA directory",
+    )
+
+    # ── Storyteller (optional narrative TTS path) ───────────────────
+    storyteller_hf_model: str = Field(
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        description="HF model id for storyteller completions",
     )
 
     # ── Environment parameters ────────────────────────────────────
@@ -174,11 +221,11 @@ class CipherConfig(BaseSettings):
         description="When true, adds delegation_efficiency bonus and spawn_cost penalty to rewards",
     )
     hf_model_red_commander: str = Field(
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for the RED Commander (top-level RED agent)",
     )
     hf_model_blue_commander: str = Field(
-        "Qwen/Qwen2.5-7B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct",
         description="HF model for the BLUE Commander (top-level BLUE agent)",
     )
 
@@ -201,3 +248,23 @@ class CipherConfig(BaseSettings):
 
 
 config = CipherConfig()
+
+# Legacy env var names (role_profiles / BaseAgent) → CipherConfig field names.
+_LORA_ENV_TO_FIELD: dict[str, str] = {
+    "RED_COMMANDER_LORA_PATH": "red_commander_lora_path",
+    "BLUE_COMMANDER_LORA_PATH": "blue_commander_lora_path",
+    "RED_PLANNER_LORA_PATH": "red_planner_lora_path",
+    "RED_ANALYST_LORA_PATH": "red_analyst_lora_path",
+    "BLUE_SURVEILLANCE_LORA_PATH": "blue_surveillance_lora_path",
+    "BLUE_THREAT_HUNTER_LORA_PATH": "blue_threat_hunter_lora_path",
+}
+
+
+def resolve_lora_adapter_path(env_key: str, default_path: str) -> str:
+    """Resolve a LoRA path from ``CipherConfig`` (no ``os.getenv`` for these keys)."""
+    field_name = _LORA_ENV_TO_FIELD.get(env_key)
+    if not field_name:
+        return default_path
+    val = getattr(config, field_name, None)
+    s = str(val).strip() if val is not None else ""
+    return s or default_path

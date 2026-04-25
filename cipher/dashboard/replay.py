@@ -6,7 +6,6 @@ Dash app wiring so the visualization layer is easier to reason about.
 """
 
 import json
-import os
 from pathlib import Path
 from datetime import datetime
 
@@ -21,11 +20,13 @@ def infer_runtime_mode(episode_data: dict | None = None) -> str:
         if isinstance(val, str) and val.strip():
             return val.strip().upper()
 
-    # Runtime env signals.
-    mode = os.getenv("LLM_MODE", "").strip().lower()
-    backend = os.getenv("LLM_BACKEND", "").strip().lower()
+    from cipher.utils.config import config
+    from cipher.utils.llm_mode import get_llm_mode
 
-    # Explicit mode always wins (main.py now sets this deterministically).
+    mode = get_llm_mode().strip().lower()
+    backend = str(config.llm_backend).strip().lower()
+
+    # Explicit mode always wins (main.py sets LLM_MODE in os.environ at runtime).
     if mode:
         return mode.upper()
     if backend in {"hf", "openai", "huggingface"}:

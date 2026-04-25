@@ -7,7 +7,7 @@ A SubagentRoleProfile is the declarative spec for a subagent role:
     - default_lifespan (steps before auto-dismiss)
     - allowed_actions (whitelist subset of ActionType values; empty = team default)
     - prompt_filename (relative to cipher/agents/prompts/)
-    - lora_env_key (optional .env variable name for hybrid mode)
+    - lora_env_key (legacy id mapped to ``CipherConfig`` via ``resolve_lora_adapter_path``)
     - lora_default_path (optional fallback adapter path)
     - heuristic_fn_name (the name of the function on the legacy class
       whose `_stub_act` we call to preserve heuristic behaviour.

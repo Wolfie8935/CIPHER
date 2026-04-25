@@ -313,7 +313,9 @@ class BaseAgent(ABC):
         if key not in self._LORA_PATH_MAP:
             return False
         env_key, default_path = self._LORA_PATH_MAP[key]
-        adapter_path = os.getenv(env_key, default_path)
+        from cipher.utils.config import resolve_lora_adapter_path
+
+        adapter_path = resolve_lora_adapter_path(env_key, default_path)
         return bool(os.path.exists(adapter_path))
 
     def _get_adaptive_temperature(self) -> float:
@@ -394,7 +396,11 @@ class BaseAgent(ABC):
         """
         key = (self.team, self.role)
         env_key, default_path = self._LORA_PATH_MAP.get(key, ("", ""))
-        adapter_path = os.getenv(env_key, default_path) if env_key else default_path
+        from cipher.utils.config import resolve_lora_adapter_path
+
+        adapter_path = (
+            resolve_lora_adapter_path(env_key, default_path) if env_key else default_path
+        )
 
         try:
             from cipher.utils.lora_client import LoRAClient

@@ -267,7 +267,7 @@ conda env create -f environment.yml && conda activate cipher
 python main.py
 ```
 
-Copy `.env.example` to `.env` and set `NVIDIA_API_KEY` for full LLM inference.
+Copy `.env.example` to `.env` and set `HF_TOKEN` (and optionally `HF_BASE_URL`) for Hugging Face Inference. All other settings live in `cipher/utils/config.py` defaults.
 
 ---
 

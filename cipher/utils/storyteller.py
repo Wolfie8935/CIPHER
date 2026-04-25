@@ -107,14 +107,16 @@ def _call_llm(prompt: str) -> str | None:
     try:
         from openai import OpenAI
 
-        api_key = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("HF_BASE_URL", "https://api-inference.huggingface.co/v1/")
+        from cipher.utils.config import config
+
+        api_key = (config.hf_token or "").strip() or os.getenv("OPENAI_API_KEY")
+        base_url = str(config.hf_base_url).strip()
 
         if not api_key:
             return None
 
         client = OpenAI(api_key=api_key, base_url=base_url)
-        model = os.getenv("STORYTELLER_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct")
+        model = str(config.storyteller_hf_model)
 
         response = client.chat.completions.create(
             model=model,

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cipher"
+version = "1.0.0"
+description = "CIPHER: adversarial multi-agent cyber-ops RL environment (OpenEnv Hackathon)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    # openenv validate (Meta CLI) expects openenv-core + ASGI stack; keep openenv for CIPHEREnv API.
+    "openenv>=0.1.13",
+    "openenv-core>=0.2.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.2.0",
+    "networkx>=3.2",
+    "openai>=1.30.0",
+    "rich>=13.7.0",
+    "colorlog>=6.8.0",
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "requests>=2.31.0",
+    "huggingface_hub>=0.23.0",
+    "plotly>=5.20.0",
+    "dash>=2.16.0",
+    "dash-bootstrap-components>=1.5.0",
+    "flask>=3.0.0",
+    "flask-cors>=5.0.0",
+    "matplotlib>=3.8.0",
+    "gunicorn>=22.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+lora = [
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "transformers>=4.40.0",
+    "peft>=0.11.0",
+    "accelerate>=0.30.0",
+    "safetensors>=0.4.0",
+    "sentencepiece>=0.1.99",
+]
+
+[project.scripts]
+server = "server.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cipher*", "server*"]

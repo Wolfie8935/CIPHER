@@ -16,22 +16,35 @@ from datetime import datetime
 from pathlib import Path
 
 
-HF_REPO_ID = os.getenv("HF_REPO_ID", "wolfie8935/cipher-specialists")
-HF_TRACES_REPO = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
+def _hf_repo_id() -> str:
+    from cipher.utils.config import config
 
-SPECIALIST_DIRS = {
-    "red_planner": os.getenv("RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"),
-    "red_analyst": os.getenv("RED_ANALYST_LORA_PATH", "red trained/cipher-red-analyst-v1"),
-    "blue_surveillance": os.getenv("BLUE_SURVEILLANCE_LORA_PATH", "blue trained/cipher-blue-surveillance-v1"),
-    "blue_threat_hunter": os.getenv("BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
-}
+    return str(config.hf_repo_id)
+
+
+def _hf_traces_repo() -> str:
+    from cipher.utils.config import config
+
+    return str(config.hf_traces_repo)
+
+def _specialist_dirs() -> dict[str, str]:
+    from cipher.utils.config import config
+
+    return {
+        "red_planner": str(config.red_planner_lora_path),
+        "red_analyst": str(config.red_analyst_lora_path),
+        "blue_surveillance": str(config.blue_surveillance_lora_path),
+        "blue_threat_hunter": str(config.blue_threat_hunter_lora_path),
+    }
 
 
 def _get_api():
     """Return HuggingFace HfApi instance, or raise with a helpful message."""
     try:
         from huggingface_hub import HfApi
-        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
+        from cipher.utils.config import config
+
+        token = (config.hf_token or "").strip() or os.getenv("HUGGINGFACE_TOKEN")
         return HfApi(token=token)
     except ImportError:
         raise RuntimeError(
@@ -53,12 +66,14 @@ def _zip_model_dir(model_dir: str, zip_path: Path) -> bool:
     return True
 
 
-def upload_specialists(repo_id: str = HF_REPO_ID, dry_run: bool = False) -> dict:
+def upload_specialists(repo_id: str | None = None, dry_run: bool = False) -> dict:
     """
     Zip and upload all specialist LoRA models to Hugging Face Hub.
 
     Returns a dict mapping specialist name → upload status.
     """
+    if repo_id is None:
+        repo_id = _hf_repo_id()
     api = _get_api()
     tmp_dir = Path("tmp_hf_upload")
     tmp_dir.mkdir(exist_ok=True)
@@ -73,7 +88,7 @@ def upload_specialists(repo_id: str = HF_REPO_ID, dry_run: bool = False) -> dict
         except Exception as e:
             print(f"  [WARN] Could not create repo: {e}")
 
-    for name, model_dir in SPECIALIST_DIRS.items():
+    for name, model_dir in _specialist_dirs().items():
         zip_path = tmp_dir / f"{name}.zip"
         zipped = _zip_model_dir(model_dir, zip_path)
         if not zipped:
@@ -105,13 +120,17 @@ def upload_specialists(repo_id: str = HF_REPO_ID, dry_run: bool = False) -> dict
     return results
 
 
-def upload_traces(traces_dir: str = "episode_traces",
-                  repo_id: str = HF_TRACES_REPO,
-                  dry_run: bool = False) -> int:
+def upload_traces(
+    traces_dir: str = "episode_traces",
+    repo_id: str | None = None,
+    dry_run: bool = False,
+) -> int:
     """
     Upload episode traces JSON files to a Hugging Face Dataset repo.
     Returns count of uploaded files.
     """
+    if repo_id is None:
+        repo_id = _hf_traces_repo()
     api = _get_api()
     src = Path(traces_dir)
     if not src.exists():
@@ -153,10 +172,14 @@ def upload_traces(traces_dir: str = "episode_traces",
     return uploaded
 
 
-def upload_reports(reports_dir: str = "episode_reports",
-                   repo_id: str = HF_TRACES_REPO,
-                   dry_run: bool = False) -> int:
+def upload_reports(
+    reports_dir: str = "episode_reports",
+    repo_id: str | None = None,
+    dry_run: bool = False,
+) -> int:
     """Upload episode narrative reports to HF Dataset."""
+    if repo_id is None:
+        repo_id = _hf_traces_repo()
     api = _get_api()
     src = Path(reports_dir)
     if not src.exists():
@@ -192,8 +215,10 @@ def upload_reports(reports_dir: str = "episode_reports",
 
 def main():
     parser = argparse.ArgumentParser(description="CIPHER Hugging Face Hub uploader")
-    parser.add_argument("--repo", default=HF_REPO_ID, help="HF model repo ID")
-    parser.add_argument("--traces-repo", default=HF_TRACES_REPO, help="HF dataset repo for traces")
+    parser.add_argument("--repo", default=_hf_repo_id(), help="HF model repo ID")
+    parser.add_argument(
+        "--traces-repo", default=_hf_traces_repo(), help="HF dataset repo for traces"
+    )
     parser.add_argument("--dry-run", action="store_true", help="List what would be uploaded without doing it")
     parser.add_argument("--skip-models", action="store_true", help="Skip model uploads")
     parser.add_argument("--skip-traces", action="store_true", help="Skip trace uploads")

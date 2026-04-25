@@ -22,7 +22,9 @@ def _fetch_demo_traces() -> None:
     if list(traces_dir.glob("*.json")):
         return  # Already have traces
 
-    repo_id = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
+    from cipher.utils.config import config
+
+    repo_id = str(config.hf_traces_repo)
     try:
         from huggingface_hub import hf_hub_download, list_repo_files, HfApi
         api = HfApi()
