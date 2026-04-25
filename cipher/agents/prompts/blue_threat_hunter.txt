@@ -70,5 +70,5 @@ OUTPUT FORMAT (always valid JSON, no other text):
 
 
 ## LEARNED HEURISTICS (Auto-evolved)
-- LEARNED: Mean false positive penalty is 0.83. Investigate only nodes with anomaly scores above 0.6. Precision over recall.
-- LEARNED: Honeypot trigger rate is only 2%. Place honeypots on zone 1→2 and zone 2→3 boundary nodes for 3x higher trigger probability.
+- LEARNED: Mean false positive penalty is 0.84. Investigate only nodes with anomaly scores above 0.6. Precision over recall.
+- LEARNED: Honeypot trigger rate is only 1%. Place honeypots on zone 1→2 and zone 2→3 boundary nodes for 3x higher trigger probability.
