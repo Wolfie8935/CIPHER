@@ -79,15 +79,44 @@ reward:
 # ── Difficulty & curriculum ───────────────────────────────────────────────────
 curriculum:
   auto_difficulty: true
+  controller: "cipher.environment.difficulty.DynamicDifficultyController"
   initial_difficulty: 0.30
+  window_size: 10
   escalation_rule: >
-    If RED win rate > 60% over last 10 episodes, difficulty += 0.05.
-    If RED win rate < 30%, difficulty -= 0.02. Capped at [0.10, 1.0].
-  difficulty_affects:
-    - honeypot_density
-    - num_target_files
-    - blue_response_speed
-    - network_complexity
+    Multi-axis adaptive system (5.md Task 5).
+    Window of last 10 episodes; win_rate = RED wins / N.
+    If win_rate > 60%: delta = +0.05 * (win_rate - 0.50) — harder.
+    If win_rate < 30%: delta = -0.02 * (0.40 - win_rate) — easier.
+    Else: delta = 0 (goldilocks zone).
+    difficulty = clamp(difficulty + delta, 0.10, 1.0).
+  axes:
+    honeypot_density:
+      range: [0.05, 0.30]
+      formula: "0.05 + d * 0.25"
+      env_key: ENV_HONEYPOT_DENSITY
+    target_files:
+      range: [1, 4]
+      formula: "max(1, int(1 + d * 3))"
+      env_key: env_target_files
+      note: "RED must exfiltrate ALL target files at hard difficulty"
+    blue_response_delay:
+      range: [3, 0]
+      formula: "max(0, int(3 - d * 3))"
+      env_key: blue_response_delay
+      note: "Steps BLUE stands down at episode start; 0 = instant response"
+    graph_size:
+      range: [50, 60]
+      formula: "int(50 + d * 10)"
+      env_key: ENV_GRAPH_SIZE
+    zone_lockdown_threshold:
+      range: [0.90, 0.50]
+      formula: "0.90 - d * 0.40"
+      env_key: zone_lockdown_threshold
+      note: "RED suspicion level at which zone locks down"
+    trap_budget_blue:
+      range: [3, 8]
+      formula: "int(3 + d * 5)"
+      env_key: ENV_TRAP_BUDGET_BLUE
 
 # ── Multi-agent roles ─────────────────────────────────────────────────────────
 agents:

@@ -148,20 +148,27 @@ def run_episode(
     scripted_blue_actions: dict[int, list[Action]] | None = None,
     stream_progress: bool = False,
     step_callback=None,
+    difficulty_params: dict | None = None,
 ) -> Any:
     """
     Run a single CIPHER episode.
 
     Args:
-        episode_number: Sequential episode number.
-        max_steps: Maximum steps in this episode.
-        verbose: If True, print rich terminal output.
-        save_trace: If True, save episode trace JSON to disk.
+        episode_number:   Sequential episode number.
+        max_steps:        Maximum steps in this episode.
+        verbose:          If True, print rich terminal output.
+        save_trace:       If True, save episode trace JSON to disk.
+        difficulty_params: Optional dict from DynamicDifficultyController
+                          with keys: honeypot_density, target_files,
+                          blue_response_delay, graph_size,
+                          zone_lockdown_threshold, trap_budget_blue.
 
     Returns:
         Tuple of (red_total_reward, blue_total_reward).
     """
     cfg = cfg or config
+    dp = difficulty_params or {}
+
     if isinstance(scenario, int):
         episode_number = scenario
         scenario = None
@@ -174,16 +181,42 @@ def run_episode(
     else:
         episode_number = getattr(scenario, "episode_number", episode_number)
 
-    # Use full graph size from config
-    graph_size = cfg.env_graph_size
+    # ── Apply difficulty overrides to scenario fields ─────────────
+    if dp:
+        if "target_files" in dp:
+            n_tf = int(dp["target_files"])
+            ep_seed = getattr(scenario, "episode_seed", episode_number * 7919)
+            scenario.target_files = [
+                f"target_file_{ep_seed}_{i:03d}" for i in range(n_tf)
+            ]
+        if "zone_lockdown_threshold" in dp:
+            zlt = float(dp["zone_lockdown_threshold"])
+            scenario.zone_lockdown_level = {
+                0: min(1.0, 0.1 + (0.9 - zlt) * 0.2),
+                1: min(1.0, 0.2 + (0.9 - zlt) * 0.3),
+                2: min(1.0, 0.4 + (0.9 - zlt) * 0.4),
+                3: min(1.0, 0.6 + (0.9 - zlt) * 0.5),
+            }
+
+    # ── Graph size and honeypot density from difficulty ────────────
+    _graph_size        = int(dp.get("graph_size", cfg.env_graph_size))
+    _honeypot_density  = float(dp.get("honeypot_density", cfg.env_honeypot_density))
+    _blue_resp_delay   = int(dp.get("blue_response_delay", 0))
+    _trap_budget_blue  = int(dp.get("trap_budget_blue", getattr(cfg, "env_trap_budget_blue", 5)))
+    _zone_lockdown_thr = float(dp.get("zone_lockdown_threshold", 0.70))
+
     if graph is None:
         graph = getattr(scenario, "generated_graph", None)
         if graph is None:
             graph = generate_enterprise_graph(
-                n_nodes=graph_size,
-                honeypot_density=cfg.env_honeypot_density,
+                n_nodes=_graph_size,
+                honeypot_density=_honeypot_density,
                 seed=scenario.episode_seed,
             )
+        elif dp:
+            # Caller passed a graph that was already built by loop.py using
+            # difficulty_params — accept it as-is.
+            pass
 
     # ── Resolve scenario against actual graph ────────────────────
     entry_points = get_entry_points(graph)
@@ -218,7 +251,16 @@ def run_episode(
 
     # ── Initialize trap registry (Phase 5) ────────────────────────
     trap_registry = TrapRegistry(cfg)
+    # Apply difficulty trap budget override for BLUE
+    if hasattr(trap_registry, "blue_budget"):
+        trap_registry.blue_budget = _trap_budget_blue
     state.trap_registry = trap_registry
+    # Store difficulty metadata on state for trace + reward logger
+    state._difficulty_params = dp
+    state._blue_response_delay = _blue_resp_delay
+    state._zone_lockdown_threshold = _zone_lockdown_thr
+    state._zone_entry_boost  = float(dp.get("zone_entry_boost", 0.12))
+    state._min_episode_steps = int(dp.get("min_episode_steps", 5))
     state.red_path_history = [scenario.red_start_node]
 
     # ── Clear shared RED danger map for this episode ──────────────
@@ -477,16 +519,26 @@ def run_episode(
             for sub in blue_commander.registry.alive():
                 setattr(sub, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
             blue_commander.observe(blue_obs)
-            try:
-                blue_action_stream = blue_commander.act_step(step=step, parallel=_parallel_blue)
-            except Exception as exc:
-                logger.error(f"BLUE commander failed: {exc}")
+            # 5.md: blue_response_delay — BLUE stands down for first N steps
+            _blue_delayed = step <= getattr(state, "_blue_response_delay", 0)
+            if _blue_delayed:
                 blue_action_stream = [Action(
                     agent_id=blue_commander.agent_id,
                     action_type=ActionType.STAND_DOWN,
-                    reasoning=f"Commander exception — safe fallback: {exc}",
+                    reasoning=f"Difficulty delay: BLUE inactive until step {state._blue_response_delay + 1}.",
                     role="commander",
                 )]
+            else:
+                try:
+                    blue_action_stream = blue_commander.act_step(step=step, parallel=_parallel_blue)
+                except Exception as exc:
+                    logger.error(f"BLUE commander failed: {exc}")
+                    blue_action_stream = [Action(
+                        agent_id=blue_commander.agent_id,
+                        action_type=ActionType.STAND_DOWN,
+                        reasoning=f"Commander exception — safe fallback: {exc}",
+                        role="commander",
+                    )]
         else:
             # ── Legacy v1: 4 fixed BLUE agents call LLM simultaneously ─────
             from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
@@ -657,7 +709,17 @@ def run_episode(
 
         # ── Check terminal conditions ────────────────────────────
         if state.is_done():
-            break
+            # 5.md min_episode_steps: if RED wins before minimum steps, let the
+            # episode continue so BLUE has a chance to contest and the log is richer.
+            # BLUE detection and max_steps terminations are never held back.
+            _min_ep = getattr(state, "_min_episode_steps", 0)
+            if (
+                state.terminal_reason == "exfiltration_complete"
+                and state.step < _min_ep
+            ):
+                state.is_terminal = False   # hold — keep simulating
+            else:
+                break
 
         all_actions_this_step = red_actions + blue_actions
         for action in all_actions_this_step:
@@ -807,6 +869,7 @@ def run_episode(
         blue=blue_reward,
         oversight=oversight,
         judgment=judgment,
+        difficulty_params=dp,
     )
 
     _EPISODE_HISTORY.append(
@@ -890,7 +953,7 @@ def run_episode(
                     ),
                 },
             }
-        _save_episode_trace(state, episode_number, verbose=verbose, commander_meta=commander_meta)
+        _save_episode_trace(state, episode_number, verbose=verbose, commander_meta=commander_meta, difficulty_params=dp)
 
     result_payload = {
         "red_reward": red_reward,
@@ -903,6 +966,7 @@ def run_episode(
         "oversight_flags": oversight_flags,
         "oversight_step_penalty_red": round(oversight_step_penalty_red, 4),
         "oversight_step_penalty_blue": round(oversight_step_penalty_blue, 4),
+        "difficulty_params": dp,
     }
     if return_payload_mode:
         return result_payload
@@ -934,7 +998,23 @@ def _process_red_action(
             ]
             suspicion_delta = edge_data.get("suspicion_delta", 0.02)
             protocol = edge_data.get("protocol", "ssh")
-            
+
+            # Zone-entry suspicion boost (5.md difficulty axis):
+            # When RED advances to a strictly higher zone, apply extra suspicion.
+            # This forces longer episodes — RED cannot rush from Zone 0 to Zone 3
+            # in 3 frictionless hops.
+            _from_zone = state.graph.nodes[state.red_current_node].get("zone", 0)
+            _to_zone   = state.graph.nodes[action.target_node].get("zone", 0)
+            _fz = _from_zone.value if hasattr(_from_zone, "value") else int(_from_zone)
+            _tz = _to_zone.value   if hasattr(_to_zone,   "value") else int(_to_zone)
+            if _tz > _fz:
+                _zone_boost = float(getattr(state, "_zone_entry_boost", 0.12))
+                suspicion_delta += _zone_boost
+                state.blue_detection_confidence = min(
+                    1.0, state.blue_detection_confidence + _zone_boost * 0.5
+                )
+                result["state_delta"]["zone_entry_boost"] = round(_zone_boost, 3)
+
             # Record movement using new Phase 2 method
             state.record_movement(
                 from_node=state.red_current_node,
@@ -1577,6 +1657,7 @@ def _save_episode_trace(
     episode_number: int,
     verbose: bool = True,
     commander_meta: dict[str, Any] | None = None,
+    difficulty_params: dict | None = None,
 ) -> None:
     """Save the full episode trace to a JSON file."""
     import json
@@ -1604,6 +1685,7 @@ def _save_episode_trace(
         "red_suspicion_score": state.red_suspicion_score,
         "blue_detection_confidence": state.blue_detection_confidence,
         "episode_log": state.episode_log,
+        "difficulty_params": difficulty_params or getattr(state, "_difficulty_params", {}),
     }
     if commander_meta is not None:
         trace["commanders"] = commander_meta

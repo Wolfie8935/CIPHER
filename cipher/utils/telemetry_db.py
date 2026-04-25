@@ -15,6 +15,8 @@ DB_PATH = Path("telemetry.db")
 
 _COLUMNS = [
     "run_id", "llm_mode", "episode", "timestamp", "steps", "terminal_reason",
+    # 5.md: difficulty columns
+    "difficulty", "honeypot_density", "graph_size", "trap_budget_blue",
     "red_total", "blue_total",
     "red_exfil", "red_stealth", "red_memory", "red_complexity",
     "red_abort_penalty", "red_honeypot_penalty", "red_emergent_bonus",
@@ -31,6 +33,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT, llm_mode TEXT, episode INTEGER, timestamp TEXT,
     steps INTEGER, terminal_reason TEXT,
+    difficulty REAL DEFAULT 0.3,
+    honeypot_density REAL DEFAULT 0.1,
+    graph_size INTEGER DEFAULT 50,
+    trap_budget_blue INTEGER DEFAULT 5,
     red_total REAL, blue_total REAL,
     red_exfil REAL, red_stealth REAL, red_memory REAL, red_complexity REAL,
     red_abort_penalty REAL, red_honeypot_penalty REAL, red_emergent_bonus REAL,
@@ -42,6 +48,14 @@ CREATE TABLE IF NOT EXISTS episodes (
     fleet_verdict TEXT, fleet_judgment TEXT
 )
 """
+
+# Migration: add difficulty columns to existing DBs without re-creating
+_MIGRATION_COLS = [
+    ("difficulty",       "REAL DEFAULT 0.3"),
+    ("honeypot_density", "REAL DEFAULT 0.1"),
+    ("graph_size",       "INTEGER DEFAULT 50"),
+    ("trap_budget_blue", "INTEGER DEFAULT 5"),
+]
 
 
 class TelemetryDB:
@@ -58,6 +72,17 @@ class TelemetryDB:
             conn = self._conn()
             conn.execute(_CREATE_SQL)
             conn.commit()
+            # Migration: add any missing difficulty columns to existing databases
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(episodes)")}
+            for col_name, col_def in _MIGRATION_COLS:
+                if col_name not in existing:
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE episodes ADD COLUMN {col_name} {col_def}"
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
             conn.close()
 
     def write_episode(self, row: Dict[str, Any]) -> None:

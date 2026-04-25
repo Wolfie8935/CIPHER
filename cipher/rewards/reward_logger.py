@@ -26,6 +26,11 @@ class RewardLogger:
         "timestamp",
         "steps",
         "terminal_reason",
+        # 5.md difficulty columns
+        "difficulty",
+        "honeypot_density",
+        "graph_size",
+        "trap_budget_blue",
         "red_total",
         "red_exfil",
         "red_stealth",
@@ -89,13 +94,19 @@ class RewardLogger:
         blue: BlueRewardComponents,
         oversight: OversightSignal,
         judgment: Optional["AuditorJudgment"] = None,
+        difficulty_params: Optional[dict] = None,
     ) -> None:
         ts = datetime.now().isoformat()
+        dp = difficulty_params or {}
         row = {
             "episode": episode,
             "timestamp": ts,
             "steps": steps,
             "terminal_reason": terminal_reason,
+            "difficulty":       round(float(dp.get("difficulty", 0.3)), 4),
+            "honeypot_density": round(float(dp.get("honeypot_density", 0.1)), 4),
+            "graph_size":       int(dp.get("graph_size", 50)),
+            "trap_budget_blue": int(dp.get("trap_budget_blue", 5)),
             "red_total": round(red.total, 4),
             "red_exfil": round(red.exfiltration_completeness, 4),
             "red_stealth": round(1 - red.detection_probability, 4),

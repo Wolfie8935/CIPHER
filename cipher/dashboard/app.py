@@ -1497,6 +1497,16 @@ def make_layout():
                     }),
                 ], C),
 
+                # Difficulty Parameters (5.md)
+                panel("DIFFICULTY PARAMETERS", [
+                    html.Div(id="difficulty-panel", style={
+                        "fontFamily": "'JetBrains Mono', monospace",
+                        "fontSize": "10px",
+                        "lineHeight": "1.7",
+                        "color": C["text"],
+                    }),
+                ], C),
+
                 # Dead Drop Inspector
                 panel("DEAD DROP INSPECTOR 📦", [
                     html.Div(id="dead-drop-table", style={
@@ -2126,6 +2136,7 @@ def export_current_replay(n_clicks, trace_path, data, step):
     Output("summary-outcome", "children"),
     Output("summary-outcome", "style"),
     Output("summary-stats", "children"),
+    Output("difficulty-panel", "children"),
     Output("dead-drop-table", "children"),
     Output("action-log", "children"),
     Input("step-slider", "value"),
@@ -2156,7 +2167,9 @@ def update_all_panels(step, data, log_filter):
              "padding": "9px 12px", "border": f"1px solid {C['border']}", "borderRadius": "10px",
              "letterSpacing": "0.12em", "textTransform": "uppercase",
              "background": "linear-gradient(180deg, rgba(24,30,44,0.88), rgba(16,20,30,0.94))"},
-            "", html.Div("No episode loaded.", style={"color": C["text_dim"]}),
+            "",
+            html.Div("No episode loaded.", style={"color": C["text_dim"]}),
+            html.Div("No episode loaded.", style={"color": C["text_dim"]}),
             html.Div("No episode loaded.", style={"color": C["text_dim"]}),
         )
 
@@ -2385,11 +2398,66 @@ def update_all_panels(step, data, log_filter):
             className="action-log-empty",
         )]
 
+    # Difficulty panel (5.md)
+    dp = data.get("difficulty_params") or {}
+    if dp:
+        _d_val = float(dp.get("difficulty", 0.3))
+        _bar_w = f"{int(_d_val * 100)}%"
+        _bar_color = (
+            C["green"] if _d_val < 0.4
+            else C["yellow"] if _d_val < 0.7
+            else C["red"]
+        )
+        difficulty_content = html.Div([
+            html.Div([
+                html.Span("Difficulty:      ", style={"color": C["text_dim"]}),
+                html.Span(f"{_d_val:.2f}", style={
+                    "color": _bar_color, "fontWeight": "700"
+                }),
+            ]),
+            html.Div([
+                html.Div(style={
+                    "height": "4px", "width": _bar_w,
+                    "background": _bar_color, "borderRadius": "2px",
+                    "marginBottom": "6px", "transition": "width 0.4s",
+                }),
+            ]),
+            html.Div([
+                html.Span("Honeypots:       ", style={"color": C["text_dim"]}),
+                html.Span(f"{float(dp.get('honeypot_density', 0.1)):.0%}"),
+            ]),
+            html.Div([
+                html.Span("Graph Size:      ", style={"color": C["text_dim"]}),
+                html.Span(f"{dp.get('graph_size', 50)} nodes"),
+            ]),
+            html.Div([
+                html.Span("Target Files:    ", style={"color": C["text_dim"]}),
+                html.Span(str(dp.get("target_files", 3))),
+            ]),
+            html.Div([
+                html.Span("BLUE Delay:      ", style={"color": C["text_dim"]}),
+                html.Span(f"{dp.get('blue_response_delay', 0)} steps"),
+            ]),
+            html.Div([
+                html.Span("Zone Lockdown:   ", style={"color": C["text_dim"]}),
+                html.Span(f"≥{float(dp.get('zone_lockdown_threshold', 0.7)):.2f}"),
+            ]),
+            html.Div([
+                html.Span("BLUE Trap Budget:", style={"color": C["text_dim"]}),
+                html.Span(str(dp.get("trap_budget_blue", 5))),
+            ]),
+        ])
+    else:
+        difficulty_content = html.Div(
+            "No difficulty data for this episode.",
+            style={"color": C["text_dim"], "fontStyle": "italic"},
+        )
+
     return (
         net_fig, tl_fig, rwd_fig,
         reward_totals,
         outcome, outcome_style,
-        stats, dd_table,
+        stats, difficulty_content, dd_table,
         html.Div(log_els, className="action-log-list"),
     )
 
