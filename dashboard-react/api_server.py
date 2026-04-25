@@ -260,6 +260,35 @@ def rewards():
         return jsonify([])
 
 
+@app.route("/api/commanders")
+def commanders():
+    """
+    Return the commander/subagent roster from the most recent episode trace.
+    Returns:
+      {
+        "arch": "v2" | "v1",
+        "red": { "agent_id", "final_roster": [...], "lifecycle": [...], "spawn_budget_remaining", "total_spawns" },
+        "blue": { ... }
+      }
+    Falls back to {"arch":"v1"} when no v2 trace exists yet.
+    """
+    traces = _discover_episode_traces()
+    for path in traces:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        meta = data.get("commanders") or {}
+        if meta:
+            return jsonify({
+                "arch": meta.get("arch", "v2"),
+                "red": meta.get("red_commander", {}),
+                "blue": meta.get("blue_commander", {}),
+                "source_trace": path.name,
+            })
+    return jsonify({"arch": "v1", "red": {}, "blue": {}})
+
+
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok", "root": str(ROOT)})

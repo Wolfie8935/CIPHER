@@ -19,7 +19,7 @@ const ACTION_ICONS = {
   abort:               '⛔',
 };
 
-const AGENT_SHORT = {
+const AGENT_SHORT_FIXED = {
   red_planner_01:             'PLANNER',
   red_analyst_01:             'ANALYST',
   red_operative_01:           'OPERATIVE',
@@ -28,7 +28,22 @@ const AGENT_SHORT = {
   blue_threat_hunter_01:      'THREAT HUNTER',
   blue_deception_architect_01:'DECEPTION',
   blue_forensics_01:          'FORENSICS',
+  red_commander_01:           'RED COMMANDER',
+  blue_commander_01:          'BLUE COMMANDER',
 };
+
+// Dynamic-id resolver. Handles v2 ids like red_planner_02, red_scout_03,
+// blue_alert_judge_01, etc., by formatting the role component.
+function shortFromId(id) {
+  if (!id || typeof id !== 'string') return id || '';
+  if (AGENT_SHORT_FIXED[id]) return AGENT_SHORT_FIXED[id];
+  const parts = id.split('_');
+  if (parts.length < 2) return id.toUpperCase();
+  // Drop leading team token + trailing numeric suffix (if any)
+  const tail = parts.slice(1).filter(p => !/^\d+$/.test(p));
+  if (tail.length === 0) return id.toUpperCase();
+  return tail.join(' ').toUpperCase();
+}
 
 function TypewriterText({ text, speed = 18 }) {
   const [shown, setShown] = useState('');
@@ -51,14 +66,26 @@ function TypewriterText({ text, speed = 18 }) {
 }
 
 function ThoughtBubble({ thought, isNewest, team }) {
-  const agentShort = AGENT_SHORT[thought.agent_id] || thought.agent_id;
+  const agentShort = shortFromId(thought.agent_id);
   const icon       = ACTION_ICONS[thought.action_type] || '•';
   const teamColor  = team === 'red' ? 'var(--red-team)' : 'var(--blue-team)';
+  const isCommander = thought.role === 'commander' || (thought.agent_id || '').includes('_commander_');
 
   return (
-    <div className={`thought-bubble ${team}${isNewest ? ' newest' : ''}`}>
+    <div className={`thought-bubble ${team}${isNewest ? ' newest' : ''}${isCommander ? ' commander' : ''}`}>
       <div className="thought-agent">
         <span style={{ color: teamColor }}>{agentShort}</span>
+        {isCommander && (
+          <span style={{
+            marginLeft: 6,
+            padding: '0 4px',
+            fontSize: 8,
+            background: teamColor,
+            color: '#000',
+            borderRadius: 2,
+            fontWeight: 700,
+          }}>★</span>
+        )}
         {thought.target_node != null && (
           <span style={{ color:'var(--text-muted)', fontWeight:400, marginLeft:6 }}>→ n{thought.target_node}</span>
         )}

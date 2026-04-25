@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cipher.agents.base_agent import Action, ActionType
+from cipher.agents.base_agent import Action, ActionType, META_ACTIONS
 from cipher.agents.red.coordination import clear_danger_map
 from cipher.training.episode_memory import record_episode as _record_episode_memory
 from cipher.agents.blue.deception_architect import BlueDeceptionArchitect
@@ -37,6 +37,7 @@ from cipher.agents.red.analyst import RedAnalyst
 from cipher.agents.red.exfiltrator import RedExfiltrator
 from cipher.agents.red.operative import RedOperative
 from cipher.agents.red.planner import RedPlanner
+from cipher.agents.commander import RedCommander, BlueCommander
 from cipher.environment.graph import (
     NodeType,
     generate_enterprise_graph,
@@ -227,20 +228,43 @@ def run_episode(
     emergent_eval = EmergentEvaluator()
 
     # ── Initialize agents ────────────────────────────────────────
-    red_agents = [
-        RedPlanner("red_planner_01", cfg),
-        RedAnalyst("red_analyst_01", cfg),
-        RedOperative("red_operative_01", cfg),
-        RedExfiltrator("red_exfiltrator_01", cfg),
-    ]
-    blue_agents = [
-        BlueSurveillance("blue_surveillance_01", cfg),
-        BlueThreatHunter("blue_threat_hunter_01", cfg),
-        BlueDeceptionArchitect("blue_deception_architect_01", cfg),
-        BlueForensics("blue_forensics_01", cfg),
-    ]
+    arch_mode = str(getattr(cfg, "cipher_agent_arch", "v2")).strip().lower()
+    use_v2 = arch_mode == "v2"
+
+    red_commander: RedCommander | None = None
+    blue_commander: BlueCommander | None = None
+
+    if use_v2:
+        red_commander = RedCommander("red_commander_01", cfg)
+        blue_commander = BlueCommander("blue_commander_01", cfg)
+        red_commander.reset_episode()
+        blue_commander.reset_episode()
+        # Keep these names for the rest of the runner — they only need to
+        # iterate something with .observe()/.act() in the legacy path; in v2
+        # the commanders ARE the team representatives.
+        red_agents = [red_commander]
+        blue_agents = [blue_commander]
+        # forensics_agent is consumed by compute_blue_reward for graph reconstruction.
+        # In v2 the role is owned by the commander's spawned 'forensics' subagent;
+        # the reward function only needs an agent-ish object with .last_reasoning
+        # and .agent_id, so we hand it a BlueForensics fallback instance for parity.
+        forensics_agent = BlueForensics("blue_forensics_legacy_proxy", cfg)
+    else:
+        red_agents = [
+            RedPlanner("red_planner_01", cfg),
+            RedAnalyst("red_analyst_01", cfg),
+            RedOperative("red_operative_01", cfg),
+            RedExfiltrator("red_exfiltrator_01", cfg),
+        ]
+        blue_agents = [
+            BlueSurveillance("blue_surveillance_01", cfg),
+            BlueThreatHunter("blue_threat_hunter_01", cfg),
+            BlueDeceptionArchitect("blue_deception_architect_01", cfg),
+            BlueForensics("blue_forensics_01", cfg),
+        ]
+        forensics_agent = blue_agents[-1]
+
     oversight_auditor = OversightAuditor(cfg)
-    forensics_agent = blue_agents[-1]
 
     # Track metrics
     steps_to_first_detection: int | None = None
@@ -311,6 +335,7 @@ def run_episode(
             state,
             dead_drop_paths=drop_paths_at_node,
             context_reset_this_step=context_reset,
+            hvt_node_id=hvt_node,
         )
         blue_obs = generate_blue_observation(state)
 
@@ -324,8 +349,24 @@ def run_episode(
         scripted_red = scripted_red_actions.get(step) if scripted_red_actions else None
         if scripted_red is not None:
             red_action_stream: list[Action] = scripted_red
+        elif use_v2 and red_commander is not None:
+            # v2 — Commander observes once and emits primitive actions for itself
+            # plus all alive subagents. Meta-actions are consumed internally.
+            from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
+            _parallel = is_live_mode() or is_hybrid_mode()
+            red_commander.observe(red_obs)
+            try:
+                red_action_stream = red_commander.act_step(step=step, parallel=_parallel)
+            except Exception as exc:
+                logger.error(f"RED commander failed: {exc}")
+                red_action_stream = [Action(
+                    agent_id=red_commander.agent_id,
+                    action_type=ActionType.WAIT,
+                    reasoning=f"Commander exception — safe fallback: {exc}",
+                    role="commander",
+                )]
         else:
-            # ── Parallel: all 4 RED agents call LLM simultaneously ──────
+            # ── Legacy v1: 4 fixed RED agents call LLM simultaneously ──────
             from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
             _parallel = is_live_mode() or is_hybrid_mode()
             if _parallel:
@@ -428,8 +469,26 @@ def run_episode(
         scripted_blue = scripted_blue_actions.get(step) if scripted_blue_actions else None
         if scripted_blue is not None:
             blue_action_stream: list[Action] = scripted_blue
+        elif use_v2 and blue_commander is not None:
+            from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
+            _parallel_blue = is_live_mode() or is_hybrid_mode()
+            # propagate discovered_drop_paths to commander + every alive subagent
+            setattr(blue_commander, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
+            for sub in blue_commander.registry.alive():
+                setattr(sub, "_blue_discovered_drop_paths", list(state.blue_discovered_drop_paths))
+            blue_commander.observe(blue_obs)
+            try:
+                blue_action_stream = blue_commander.act_step(step=step, parallel=_parallel_blue)
+            except Exception as exc:
+                logger.error(f"BLUE commander failed: {exc}")
+                blue_action_stream = [Action(
+                    agent_id=blue_commander.agent_id,
+                    action_type=ActionType.STAND_DOWN,
+                    reasoning=f"Commander exception — safe fallback: {exc}",
+                    role="commander",
+                )]
         else:
-            # ── Parallel: all 4 BLUE agents call LLM simultaneously ─────
+            # ── Legacy v1: 4 fixed BLUE agents call LLM simultaneously ─────
             from cipher.utils.llm_mode import is_live_mode, is_hybrid_mode
             _parallel_blue = is_live_mode() or is_hybrid_mode()
             if _parallel_blue:
@@ -494,6 +553,61 @@ def run_episode(
             _log_agent_thought(step, action)
             if verbose:
                 _print_action(step, action, state, "blue")
+
+        # ── v2: persist subagent lifecycle events into episode log ──
+        # Use a per-commander cursor so we keep the canonical events list
+        # intact in the registry (used by the trace metadata at episode end).
+        if use_v2:
+            for commander in (red_commander, blue_commander):
+                if commander is None:
+                    continue
+                cursor_attr = "_lifecycle_cursor"
+                cursor = getattr(commander, cursor_attr, 0)
+                events = commander.registry.events
+                while cursor < len(events):
+                    ev = events[cursor]
+                    if ev.step > step:
+                        break
+                    state.log_action(
+                        agent_id=ev.subagent_id or commander.agent_id,
+                        action_type=f"subagent_{ev.event_type}",
+                        action_payload={
+                            "role": ev.role,
+                            "team": ev.team,
+                            "parent_id": ev.parent_id,
+                            "reason": ev.reason,
+                        },
+                        result={"event_type": ev.event_type},
+                    )
+                    cursor += 1
+                setattr(commander, cursor_attr, cursor)
+
+        # ── Passive detection boost (applied before terminal check) ─────
+        # Each step, RED's suspicion generates detectable anomalies proportionally.
+        # Placed here so the co-detection check can fire in the same step as
+        # RED's last move/exfiltration, giving BLUE a fair chance to interrupt.
+        _passive_boost = round(float(state.red_suspicion_score) * 0.04, 4)
+        if _passive_boost > 0:
+            state.blue_detection_confidence = min(
+                1.0, state.blue_detection_confidence + _passive_boost
+            )
+
+        # ── High-confidence co-detection terminal ─────────────────────────
+        # BLUE wins when both detection confidence AND RED suspicion cross 0.75.
+        # Applied before is_done() so it can interrupt a final exfiltration step.
+        if (
+            not state.is_terminal
+            and state.blue_detection_confidence >= 0.75
+            and state.red_suspicion_score >= 0.75
+        ):
+            state.is_terminal = True
+            state.terminal_reason = "detected"
+            logger.info(
+                "High-confidence co-detection terminal fired: "
+                "det=%.2f susp=%.2f",
+                state.blue_detection_confidence,
+                state.red_suspicion_score,
+            )
 
         # ── Check terminal conditions ────────────────────────────
         if state.is_done():
@@ -595,8 +709,17 @@ def run_episode(
     setattr(state, "blue_first_detection_step", steps_to_first_detection)
     setattr(state, "blue_confirmed_detection_step", confirmed_detection_step)
 
+    # In v2 prefer the live commander-spawned forensics subagent (its legacy
+    # proxy accumulated the suspected_path during the episode).
+    forensics_for_reward = forensics_agent
+    if use_v2 and blue_commander is not None:
+        for sub in blue_commander.registry.alive():
+            if sub.role == "forensics" and getattr(sub, "_legacy_proxy", None) is not None:
+                forensics_for_reward = sub._legacy_proxy
+                break
+
     red_reward = compute_red_reward(state, scenario, vault, cfg)
-    blue_reward = compute_blue_reward(state, graph, forensics_agent, cfg)
+    blue_reward = compute_blue_reward(state, graph, forensics_for_reward, cfg)
     oversight = compute_oversight_signal(state, _EPISODE_HISTORY, cfg)
 
     red_reward.total += oversight.total_red_adjustment
@@ -693,7 +816,34 @@ def run_episode(
 
     # ── Save trace ───────────────────────────────────────────────
     if save_trace:
-        _save_episode_trace(state, episode_number, verbose=verbose)
+        commander_meta: dict[str, Any] | None = None
+        if use_v2:
+            commander_meta = {
+                "arch": "v2",
+                "red_commander": {
+                    "agent_id": red_commander.agent_id if red_commander else None,
+                    "final_roster": red_commander.roster_snapshot() if red_commander else [],
+                    "lifecycle": red_commander.lifecycle_events() if red_commander else [],
+                    "spawn_budget_remaining": (
+                        red_commander.registry.spawn_budget_remaining if red_commander else 0
+                    ),
+                    "total_spawns": (
+                        red_commander.registry.total_spawns if red_commander else 0
+                    ),
+                },
+                "blue_commander": {
+                    "agent_id": blue_commander.agent_id if blue_commander else None,
+                    "final_roster": blue_commander.roster_snapshot() if blue_commander else [],
+                    "lifecycle": blue_commander.lifecycle_events() if blue_commander else [],
+                    "spawn_budget_remaining": (
+                        blue_commander.registry.spawn_budget_remaining if blue_commander else 0
+                    ),
+                    "total_spawns": (
+                        blue_commander.registry.total_spawns if blue_commander else 0
+                    ),
+                },
+            }
+        _save_episode_trace(state, episode_number, verbose=verbose, commander_meta=commander_meta)
 
     result_payload = {
         "red_reward": red_reward,
@@ -961,9 +1111,10 @@ def _process_blue_action(
                 result["state_delta"]["proximity_boost"] = round(_adj_boost, 3)
 
     elif action.action_type == ActionType.ANALYZE_ANOMALY:
-        # Analyze anomaly: higher boost if there are real (non-noise) anomalies
-        # to reward BLUE for doing forensic work before alerting
-        _analyze_boost = 0.02
+        # Analyze anomaly — base boost tripled so BLUE can realistically reach
+        # the 0.80 detection threshold within 30 steps without always hitting the
+        # exact right node. Same-zone analysis gets an additional bump.
+        _analyze_boost = 0.06
         if action.target_node is not None:
             try:
                 inv_zone = state.graph.nodes[action.target_node].get("zone")
@@ -972,7 +1123,7 @@ def _process_blue_action(
                     inv_z = inv_zone.value if hasattr(inv_zone, "value") else int(inv_zone)
                     red_z = red_zone.value if hasattr(red_zone, "value") else int(red_zone)
                     if inv_z == red_z:
-                        _analyze_boost = 0.04  # analyzing the right zone
+                        _analyze_boost = 0.10  # strong bonus for targeting the right zone
             except Exception:
                 pass
         state.blue_detection_confidence = min(
@@ -1372,6 +1523,7 @@ def _save_episode_trace(
     state: "EpisodeState",
     episode_number: int,
     verbose: bool = True,
+    commander_meta: dict[str, Any] | None = None,
 ) -> None:
     """Save the full episode trace to a JSON file."""
     import json
@@ -1379,7 +1531,7 @@ def _save_episode_trace(
 
     traces_dir = Path("episode_traces")
     traces_dir.mkdir(exist_ok=True)
-    
+
     mode = os.environ.get("LLM_MODE", "stub")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     trace_path = traces_dir / f"episode_{episode_number:03d}_{ts}_{mode}.json"
@@ -1400,6 +1552,8 @@ def _save_episode_trace(
         "blue_detection_confidence": state.blue_detection_confidence,
         "episode_log": state.episode_log,
     }
+    if commander_meta is not None:
+        trace["commanders"] = commander_meta
 
     with open(trace_path, "w", encoding="utf-8") as f:
         json.dump(trace, f, indent=2, default=str)

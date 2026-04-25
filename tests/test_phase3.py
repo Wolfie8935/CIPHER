@@ -561,6 +561,19 @@ class TestActionSets:
         assert ActionType.STAND_DOWN in BLUE_ACTIONS
 
     def test_sets_disjoint(self):
-        """RED and BLUE action sets should have no overlap."""
+        """RED and BLUE action sets should only overlap on intentionally shared actions.
+
+        Intentionally-shared actions:
+        - EMERGENT: agent-proposed novel actions, available to both teams.
+        - SPAWN_SUBAGENT / DELEGATE_TASK / DISMISS_SUBAGENT: commander
+          meta-actions for the v2 commander+subagent architecture.
+        """
+        allowed_overlap = {
+            ActionType.EMERGENT,
+            ActionType.SPAWN_SUBAGENT,
+            ActionType.DELEGATE_TASK,
+            ActionType.DISMISS_SUBAGENT,
+        }
         overlap = RED_ACTIONS & BLUE_ACTIONS
-        assert len(overlap) == 0, f"Overlapping actions: {overlap}"
+        unintended = overlap - allowed_overlap
+        assert not unintended, f"Unintentional cross-team actions: {unintended}"

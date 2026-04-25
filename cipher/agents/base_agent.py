@@ -77,6 +77,21 @@ class ActionType(str, Enum):
     # ── EMERGENT (self-reliant novel actions) ─────────────────────
     EMERGENT = "emergent"  # Agent-proposed action outside the predefined vocabulary
 
+    # ── Commander meta-actions (v2 architecture) ──────────────────
+    # These are NEVER dispatched to the environment. They are consumed by the
+    # commander's SubagentRegistry to manage the dynamic subagent roster.
+    SPAWN_SUBAGENT = "spawn_subagent"
+    DELEGATE_TASK = "delegate_task"
+    DISMISS_SUBAGENT = "dismiss_subagent"
+
+
+# Set of meta-actions the registry consumes (do not pass to env dispatcher).
+META_ACTIONS = frozenset({
+    "spawn_subagent",
+    "delegate_task",
+    "dismiss_subagent",
+})
+
 
 class EmergentAction(BaseModel):
     """An agent-proposed action outside the predefined ActionType vocabulary."""
@@ -85,6 +100,23 @@ class EmergentAction(BaseModel):
     target_file: str | None = None
     reasoning: str = ""       # Why the agent chose this novel action
     expected_effect: str = "" # What the agent thinks will happen
+
+
+class SubagentSpec(BaseModel):
+    """
+    Declarative spec for a subagent. The commander emits this (inside an
+    Action with action_type=SPAWN_SUBAGENT) and the SubagentRegistry uses it
+    to instantiate a Subagent worker for the team.
+    """
+
+    role_name: str                       # must match a registered SubagentRoleProfile
+    team: str                            # 'red' | 'blue'
+    task_brief: str = ""                 # natural-language directive from commander
+    lifespan_steps: int = 5              # auto-dismiss after this many steps
+    allowed_actions: list[str] | None = None  # optional whitelist override
+    parent_id: str = ""                  # commander id that spawned this subagent
+    subagent_id: str = ""                # filled in by registry on spawn
+    use_llm: bool = False                # if True, subagent calls LLM; else heuristic
 
 
 class Action(BaseModel):
@@ -111,6 +143,12 @@ class Action(BaseModel):
     # Emergent action payload — populated when action_type == EMERGENT
     emergent_data: EmergentAction | None = None
 
+    # ── Commander/subagent provenance (v2) ────────────────────────
+    role: str | None = None          # role name (e.g. 'planner', 'commander', 'scout')
+    spawned_by: str | None = None    # parent commander agent_id when emitted by a subagent
+    subagent_spec: SubagentSpec | None = None  # populated when action_type == SPAWN_SUBAGENT
+    target_subagent_id: str | None = None      # for DELEGATE_TASK / DISMISS_SUBAGENT
+
 
 # ── Prompt templates directory ────────────────────────────────
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -136,6 +174,10 @@ RED_ACTIONS = {
     ActionType.SCAN,
     # Emergent (self-reliant) actions
     ActionType.EMERGENT,
+    # Commander-only meta-actions (validated separately for role='commander')
+    ActionType.SPAWN_SUBAGENT,
+    ActionType.DELEGATE_TASK,
+    ActionType.DISMISS_SUBAGENT,
 }
 
 BLUE_ACTIONS = {
@@ -154,6 +196,10 @@ BLUE_ACTIONS = {
     ActionType.DEPLOY_FALSE_ESCALATION,  # Legacy alias
     # Emergent (self-reliant) actions
     ActionType.EMERGENT,
+    # Commander-only meta-actions (validated separately for role='commander')
+    ActionType.SPAWN_SUBAGENT,
+    ActionType.DELEGATE_TASK,
+    ActionType.DISMISS_SUBAGENT,
 }
 
 # Max history entries to keep in prompt (controls token budget)
@@ -249,10 +295,14 @@ class BaseAgent(ABC):
         self.action_history.append(action)
         return action
 
-    # Maps (team, role) → (env_var, default_adapter_path) for LoRA specialists
+    # Maps (team, role) → (env_var, default_adapter_path) for LoRA specialists.
+    # v2 adds the COMMANDER entries — when --hybrid, the trained commanders
+    # take over the orchestration layer via these LoRAs.
     _LORA_PATH_MAP: dict = {
-        ("red", "planner"):        ("RED_PLANNER_LORA_PATH",       os.path.join("red trained", "cipher-red-planner-v1")),
-        ("red", "analyst"):        ("RED_ANALYST_LORA_PATH",        os.path.join("red trained", "cipher-red-analyst-v1")),
+        ("red",  "commander"):     ("RED_COMMANDER_LORA_PATH",      os.path.join("red trained", "cipher-red-commander-v1")),
+        ("blue", "commander"):     ("BLUE_COMMANDER_LORA_PATH",     os.path.join("blue trained", "cipher-blue-commander-v1")),
+        ("red",  "planner"):       ("RED_PLANNER_LORA_PATH",        os.path.join("red trained", "cipher-red-planner-v1")),
+        ("red",  "analyst"):       ("RED_ANALYST_LORA_PATH",        os.path.join("red trained", "cipher-red-analyst-v1")),
         ("blue", "surveillance"):  ("BLUE_SURVEILLANCE_LORA_PATH",  os.path.join("blue trained", "cipher-blue-surveillance-v1")),
         ("blue", "threat_hunter"): ("BLUE_THREAT_HUNTER_LORA_PATH", os.path.join("blue trained", "cipher-blue-threat-hunter-v1")),
     }
@@ -482,16 +532,17 @@ class BaseAgent(ABC):
         2. Compressed conversation history (last 5 full + summary of older)
         3. Current observation as user message
         """
-        # Change 3: prepend recent episode history to system prompt so agents
-        # learn from past episodes and know what strategies succeeded or failed.
+        # Prepend recent episode history ONLY in hybrid/train mode so that live
+        # episodes start fresh and don't inherit stale win/loss patterns.
         system_content = self._system_prompt
-        try:
-            from cipher.training.episode_memory import get_recent_summary
-            ep_summary = get_recent_summary(n=3)
-            if ep_summary:
-                system_content = ep_summary + "\n\n" + system_content
-        except ImportError:
-            pass
+        if getattr(self.config, "llm_mode", "stub") == "hybrid":
+            try:
+                from cipher.training.episode_memory import get_recent_summary
+                ep_summary = get_recent_summary(n=3)
+                if ep_summary:
+                    system_content = ep_summary + "\n\n" + system_content
+            except ImportError:
+                pass
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_content},
@@ -536,17 +587,27 @@ class BaseAgent(ABC):
         honeypot_nodes = set(getattr(obs, 'honeypot_nodes_nearby', []) or [])
         breadcrumb_nodes = set(getattr(obs, 'breadcrumb_nodes_nearby', []) or [])
         danger_nodes = honeypot_nodes | breadcrumb_nodes
+        hvt_node_id = int(getattr(obs, 'hvt_node_id', -1))
 
         lines = [
             f"STEP {obs.step} — RED TEAM OBSERVATION",
             f"Current node: {obs.current_node} | Zone: {obs.current_zone} | Type: {node_type_val}",
             f"Hostname: {obs.current_hostname}",
             f"Suspicion level: {obs.estimated_suspicion:.2f} | Privilege: {obs.current_privilege_level}",
-            # Change 2: BLUE detection confidence — RED now sees how close BLUE is to catching them
             f"BLUE detection confidence: {obs.blue_detection_confidence:.2f} (abort if this reaches 0.80+)",
-            # Critical status line — LLM must see this immediately
-            f"EXFILTRATE ALLOWED: {'YES — you are at the HIGH_VALUE_TARGET. Use EXFILTRATE now.' if at_hvt else 'NO — current node is not the HVT. Keep moving deeper.'}",
         ]
+
+        # Show HVT node ID prominently so RED can navigate directly
+        if at_hvt:
+            lines.append("EXFILTRATE ALLOWED: YES — you are AT the HIGH_VALUE_TARGET node. Use EXFILTRATE now.")
+        elif hvt_node_id >= 0:
+            lines.append(
+                f"EXFILTRATE ALLOWED: NO — TARGET IS node n{hvt_node_id} (Zone 3). "
+                f"You must MOVE to n{hvt_node_id} to exfiltrate. "
+                f"{'It is adjacent — MOVE THERE NOW.' if hvt_node_id in (getattr(obs, 'adjacent_nodes', []) or []) else 'Navigate toward it now.'}"
+            )
+        else:
+            lines.append("EXFILTRATE ALLOWED: NO — keep moving to Zone 3.")
 
         # Services
         if obs.current_services:
@@ -606,24 +667,58 @@ class BaseAgent(ABC):
 
         # Change 2: danger map from shared RED coordination module
         try:
-            from cipher.agents.red.coordination import get_danger_nodes
-            danger_map = get_danger_nodes(threshold=0.4)
-            if danger_map:
-                flagged = sorted(danger_map, key=danger_map.get, reverse=True)[:5]
-                scores = ", ".join(f"n{n}={danger_map[n]:.2f}" for n in flagged)
+            from cipher.agents.red.coordination import (
+                get_danger_nodes,
+                get_danger_score,
+            )
+            danger_nodes = get_danger_nodes(threshold=0.4)
+            if danger_nodes:
+                # get_danger_nodes returns a set[int]; look up scores individually
+                # so this works whether the upstream returns a set or a dict.
+                if isinstance(danger_nodes, dict):
+                    flagged = sorted(danger_nodes, key=danger_nodes.get, reverse=True)[:5]
+                    scores = ", ".join(f"n{n}={danger_nodes[n]:.2f}" for n in flagged)
+                else:
+                    scored = [(n, get_danger_score(n)) for n in danger_nodes]
+                    scored.sort(key=lambda x: x[1], reverse=True)
+                    scores = ", ".join(f"n{n}={s:.2f}" for n, s in scored[:5])
                 lines.append(f"DANGER MAP (suspicion spikes observed by RED team): {scores}")
         except ImportError:
             pass
 
-        # Change 2: available paths with suspicion costs — show as a decision table
+        # Change 2: available paths — sorted by ZONE DESC then suspicion ASC,
+        # so the LLM sees the highest-zone advancement options FIRST and picks
+        # them by default. Stalling in the same zone is the #1 cause of mission
+        # failure in live runs.
         if obs.available_paths:
-            lines.append("PATH OPTIONS (choose lowest suspicion_delta route):")
-            for p in obs.available_paths[:6]:
+            sorted_paths = sorted(
+                obs.available_paths,
+                key=lambda p: (-int(p.get("zone", 0)), float(p.get("suspicion_delta", 0.0))),
+            )
+            lines.append(
+                "PATH OPTIONS (PRIORITISE highest zone — advancing zones is the "
+                "mission. Same-zone moves should only be picked if NO higher-zone "
+                "option exists):"
+            )
+            for p in sorted_paths[:6]:
                 node_id = p.get("node", "?")
                 s_delta = p.get("suspicion_delta", 0.0)
                 zone = p.get("zone", "?")
                 host = p.get("hostname", "?")
-                lines.append(f"  → n{node_id} (zone={zone}, host={host}, suspicion_cost={s_delta:+.3f})")
+                marker = " *** ZONE-ADVANCE" if zone != "?" and zone > obs.current_zone else ""
+                # Mark the HVT node explicitly so RED navigates there directly
+                if hvt_node_id >= 0 and node_id == hvt_node_id:
+                    marker += " <<< THIS IS THE HVT — MOVE HERE TO EXFILTRATE"
+                lines.append(
+                    f"  -> n{node_id} (zone={zone}, host={host}, suspicion_cost={s_delta:+.3f}){marker}"
+                )
+            # If HVT is not in the top-6 adjacent paths, add a reminder
+            if hvt_node_id >= 0 and not at_hvt:
+                hvt_in_paths = any(p.get("node") == hvt_node_id for p in obs.available_paths)
+                if not hvt_in_paths:
+                    lines.append(
+                        f"  [HVT node n{hvt_node_id} is not adjacent — keep moving toward Zone 3]"
+                    )
 
         # Change 4b: contextual emergent hints when RED is stuck
         if obs.estimated_suspicion > 0.60 and zone_stall >= 3:
@@ -638,7 +733,13 @@ class BaseAgent(ABC):
             if at_hvt:
                 exfil_done = set(getattr(obs, 'exfiltrated_files', []) or [])
                 remaining = [f for f in obs.files_at_current_node if f not in exfil_done]
-                lines.append(f"TARGET FILES HERE: {', '.join(remaining)} — EXFILTRATE THESE")
+                if remaining:
+                    lines.append(f"TARGET FILES HERE: {', '.join(remaining)} — EXFILTRATE THESE NOW")
+                    lines.append(
+                        f'EXACT JSON TO EMIT: '
+                        f'{{"action_type":"exfiltrate","target_file":"{remaining[0]}",'
+                        f'"reasoning":"At HVT — extracting target file."}}'
+                    )
                 if exfil_done:
                     lines.append(f"Already exfiltrated: {', '.join(exfil_done)}")
             else:
@@ -827,7 +928,12 @@ class BaseAgent(ABC):
                 f"{self.agent_id}: EMERGENT action proposed — intent='{intent}'"
             )
 
-        # Validate team-action consistency (EMERGENT passes for both teams)
+        # Validate team-action consistency (EMERGENT passes for both teams).
+        # BLUE agents often emit 'wait' (LLMs use it as a generic no-op) — silently
+        # remap to the blue equivalent 'stand_down' rather than logging a noisy warning.
+        if self.team == "blue" and action_type == ActionType.WAIT:
+            action_type = ActionType.STAND_DOWN
+
         valid_set = RED_ACTIONS if self.team == "red" else BLUE_ACTIONS
         if action_type not in valid_set:
             logger.warning(
@@ -848,6 +954,62 @@ class BaseAgent(ABC):
         reasoning = data.get("reasoning", "")
         trap_params = data.get("trap_params") or data.get("trap_payload") or {}
 
+        # ── Commander meta-action payloads (v2) ──────────────────────
+        subagent_spec_payload: SubagentSpec | None = None
+        target_subagent_id_val: str | None = None
+        if action_type in (
+            ActionType.SPAWN_SUBAGENT,
+            ActionType.DELEGATE_TASK,
+            ActionType.DISMISS_SUBAGENT,
+        ):
+            # Only commanders may emit meta-actions; everyone else falls back.
+            if getattr(self, "role", "") != "commander":
+                logger.warning(
+                    "%s: meta-action '%s' is commander-only — falling back.",
+                    self.agent_id, action_type.value,
+                )
+                action_type = fallback_type
+            else:
+                if action_type == ActionType.SPAWN_SUBAGENT:
+                    spec_data = data.get("subagent_spec") or data.get("spec") or {}
+                    if isinstance(spec_data, dict) and spec_data.get("role_name"):
+                        try:
+                            subagent_spec_payload = SubagentSpec(
+                                role_name=str(spec_data.get("role_name", "")),
+                                team=str(spec_data.get("team", self.team)) or self.team,
+                                task_brief=str(spec_data.get("task_brief", ""))[:500],
+                                lifespan_steps=int(spec_data.get("lifespan_steps", 5)),
+                                allowed_actions=spec_data.get("allowed_actions"),
+                                use_llm=bool(spec_data.get("use_llm", False)),
+                                parent_id=self.agent_id,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "%s: malformed SPAWN_SUBAGENT spec (%s) — falling back.",
+                                self.agent_id, exc,
+                            )
+                            action_type = fallback_type
+                    else:
+                        logger.warning(
+                            "%s: SPAWN_SUBAGENT without role_name — falling back.",
+                            self.agent_id,
+                        )
+                        action_type = fallback_type
+                elif action_type in (ActionType.DELEGATE_TASK, ActionType.DISMISS_SUBAGENT):
+                    target_subagent_id_val = (
+                        data.get("target_subagent_id")
+                        or data.get("subagent_id")
+                        or ""
+                    )
+                    if not target_subagent_id_val:
+                        logger.warning(
+                            "%s: %s missing target_subagent_id — falling back.",
+                            self.agent_id, action_type.value,
+                        )
+                        action_type = fallback_type
+                    else:
+                        target_subagent_id_val = str(target_subagent_id_val)
+
         # EXFIL semantic guardrail: require a plausible file name target.
         if action_type == ActionType.EXFILTRATE:
             invalid_exfil_target = False
@@ -863,23 +1025,45 @@ class BaseAgent(ABC):
                 if target_file.isdigit() or target_file.lower().startswith("node_"):
                     invalid_exfil_target = True
             if invalid_exfil_target:
-                logger.warning(
-                    f"{self.agent_id}: Invalid EXFILTRATE semantics "
-                    f"(target_file={target_file!r}). Falling back to {fallback_type.value}."
-                )
-                action_type = fallback_type
-                target_file = None
-                if not reasoning:
-                    reasoning = (
-                        "Invalid EXFILTRATE target_file semantics — "
-                        "falling back to safe action."
+                # AUTO-FILL: if RED is at the HVT and there are files available,
+                # silently pick the first un-exfiltrated file. This lets the LLM
+                # emit a bare {"action_type":"exfiltrate"} from the HVT and still
+                # succeed instead of getting stuck waiting.
+                obs = self._current_observation
+                auto_filled = False
+                if isinstance(obs, RedObservation):
+                    files_here = list(getattr(obs, "files_at_current_node", []) or [])
+                    already_exfil = set(getattr(obs, "exfiltrated_files", []) or [])
+                    remaining = [f for f in files_here if f not in already_exfil]
+                    if remaining:
+                        target_file = remaining[0]
+                        auto_filled = True
+                        if not reasoning:
+                            reasoning = f"Auto-filled target_file={target_file} at HVT."
+                if not auto_filled:
+                    logger.warning(
+                        f"{self.agent_id}: Invalid EXFILTRATE semantics "
+                        f"(target_file={target_file!r}). Falling back to {fallback_type.value}."
                     )
+                    action_type = fallback_type
+                    target_file = None
+                    if not reasoning:
+                        reasoning = (
+                            "Invalid EXFILTRATE target_file semantics — "
+                            "falling back to safe action."
+                        )
             # Normalize EXFIL action shape: file-based target only.
             target_node = None
 
-        # EMERGENT actions bypass standard semantic guardrails and trap budget —
-        # they are evaluated by EmergentEvaluator in the episode runner instead.
-        if action_type != ActionType.EMERGENT and not self._passes_semantic_guardrails(action_type):
+        # EMERGENT and meta-actions bypass standard semantic guardrails and trap budget —
+        # they are evaluated separately (EmergentEvaluator / SubagentRegistry).
+        is_meta = action_type.value in META_ACTIONS
+        rejected_action: str = ""
+        if (
+            action_type != ActionType.EMERGENT
+            and not is_meta
+            and not self._passes_semantic_guardrails(action_type)
+        ):
             rejected_action = action_type.value
             logger.warning(
                 f"{self.agent_id}: Semantic guardrail rejected action "
@@ -894,7 +1078,40 @@ class BaseAgent(ABC):
                 f"falling back to {fallback_type.value}."
             )
 
-        if not self._is_trap_action_allowed(action_type, target_node):
+        # Special rescue: EXFILTRATE was rejected because RED is not at the HVT.
+        # Instead of WAITing (which causes an infinite loop), redirect to MOVE
+        # toward the HVT if it is adjacent, or any Zone-3 neighbour otherwise.
+        if rejected_action == "exfiltrate" and self.team == "red":
+            obs_r = self._current_observation
+            if isinstance(obs_r, RedObservation):
+                honeypots_r = set(getattr(obs_r, "honeypot_nodes_nearby", []) or [])
+                hvt_node: int | None = None
+                zone3_node: int | None = None
+                for idx, adj_n in enumerate(obs_r.adjacent_nodes or []):
+                    ntype = (
+                        obs_r.adjacent_node_types[idx].value
+                        if idx < len(obs_r.adjacent_node_types)
+                        and hasattr(obs_r.adjacent_node_types[idx], "value")
+                        else ""
+                    )
+                    if ntype == "high_value_target" and adj_n not in honeypots_r:
+                        hvt_node = int(adj_n)
+                        break
+                    if adj_n not in honeypots_r and zone3_node is None:
+                        for p in (getattr(obs_r, "available_paths", None) or []):
+                            if int(p.get("node", -1)) == int(adj_n) and int(p.get("zone", 0)) >= 3:
+                                zone3_node = int(adj_n)
+                best_move = hvt_node if hvt_node is not None else zone3_node
+                if best_move is not None:
+                    action_type = ActionType.MOVE
+                    target_node = best_move
+                    target_file = None
+                    reasoning = (
+                        f"EXFIL-to-MOVE rescue: not at HVT — "
+                        f"moving to n{best_move} to reach exfiltration point."
+                    )
+
+        if not is_meta and not self._is_trap_action_allowed(action_type, target_node):
             rejected_trap = action_type.value
             action_type = fallback_type
             target_node = None
@@ -917,6 +1134,9 @@ class BaseAgent(ABC):
             trap_params=trap_params if isinstance(trap_params, dict) else {},
             trap_payload=trap_params if isinstance(trap_params, dict) else {},
             emergent_data=emergent_payload,
+            role=getattr(self, "role", None),
+            subagent_spec=subagent_spec_payload,
+            target_subagent_id=target_subagent_id_val,
         )
 
     def _passes_semantic_guardrails(self, action_type: ActionType) -> bool:
@@ -968,11 +1188,12 @@ class BaseAgent(ABC):
             )
             return node_type_val == "high_value_target"
 
-        # BLUE alerts should require strong evidence to reduce false positives.
+        # BLUE alerts should require reasonable evidence to reduce false positives.
         if action_type == ActionType.TRIGGER_ALERT and isinstance(obs, BlueObservation):
-            # Lowered from 0.70 → 0.60: at 0.69 BLUE was falling back to stand_down
-            # with old reasoning, creating mismatch logs every episode.
-            confidence_ok = float(obs.current_detection_confidence) >= 0.55
+            # Lowered to 0.40 — with the new passive detection boost BLUE reaches
+            # 40%+ quickly, matching the alert_judge subagent threshold so BLUE
+            # commanders can trigger alerts at the same confidence level.
+            confidence_ok = float(obs.current_detection_confidence) >= 0.40
             honeypot_ok = bool(obs.honeypots_triggered_this_step)
             return confidence_ok or honeypot_ok
 

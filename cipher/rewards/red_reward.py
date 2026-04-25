@@ -38,6 +38,12 @@ class RedRewardComponents:
     zone_progress_bonus: float = 0.0
     # Emergent action creativity bonus (capped at 0.3 per episode)
     emergent_action_bonus: float = 0.0
+    # v2 architecture: subagent delegation accounting
+    subagent_spawns: int = 0
+    delegation_efficiency_bonus: float = 0.0
+    spawn_cost_penalty: float = 0.0
+    # Zone-stall penalty: applied when RED spends 5+ consecutive steps in a zone.
+    zone_stall_penalty: float = 0.0
     stub_fields: list[str] = field(default_factory=list)
 
     @property
@@ -176,12 +182,57 @@ def compute_red_reward(
             * memory_efficiency_score
             * operation_complexity_multiplier
         )
+
+        # Zone-stall penalty: -0.05 for every step beyond a 5-step grace window
+        # that RED spends in the same zone, capped at -0.30.
+        zone_stall_penalty = 0.0
+        try:
+            path = list(getattr(state, "red_path_history", []) or [])
+            if len(path) >= 2:
+                max_stall = 0
+                run = 1
+                for i in range(1, len(path)):
+                    z_prev = state.get_zone_for_node(path[i - 1])
+                    z_curr = state.get_zone_for_node(path[i])
+                    if z_curr is not None and z_curr == z_prev:
+                        run += 1
+                        max_stall = max(max_stall, run)
+                    else:
+                        run = 1
+                # Grace window of 5 steps — penalty per step over that.
+                stall_over = max(0, max_stall - 5)
+                zone_stall_penalty = round(max(-0.30, -0.05 * stall_over), 4)
+        except Exception:
+            pass
+
+        # v2 delegation accounting (gated behind env_reward_delegation_enabled)
+        red_subagent_spawns = sum(
+            1
+            for entry in getattr(state, "episode_log", [])
+            if entry.get("action_type") == "subagent_spawn"
+            and str((entry.get("payload") or {}).get("team", "")) == "red"
+        )
+        delegation_efficiency_bonus = 0.0
+        spawn_cost_penalty = 0.0
+        if bool(getattr(cfg, "env_reward_delegation_enabled", False)):
+            # Reward outcome-per-spawn: small bonus when exfil > 0 with few spawns.
+            if red_subagent_spawns > 0 and exfiltration_completeness > 0.0:
+                delegation_efficiency_bonus = round(
+                    min(0.15, exfiltration_completeness / max(1.0, red_subagent_spawns) * 0.6),
+                    4,
+                )
+            # Tiny per-spawn cost so the commander can't spam ad-infinitum.
+            spawn_cost_penalty = round(-0.01 * red_subagent_spawns, 4)
+
         total = (
             multiplicative_core
             + abort_penalty
             + honeypot_trigger_penalty
             + zone_progress_bonus
             + emergent_action_bonus
+            + delegation_efficiency_bonus
+            + spawn_cost_penalty
+            + zone_stall_penalty
         )
 
         logger.debug("RED reward component exfiltration_completeness=%.4f", exfiltration_completeness)
@@ -201,6 +252,8 @@ def compute_red_reward(
 
         logger.debug("RED reward component emergent_action_bonus=%.4f", emergent_action_bonus)
 
+        logger.debug("RED reward component zone_stall_penalty=%.4f (max_stall=%d)", zone_stall_penalty, max_stall if "max_stall" in dir() else 0)
+
         return RedRewardComponents(
             exfiltration_completeness=round(exfiltration_completeness, 4),
             detection_probability=round(detection_probability, 4),
@@ -210,6 +263,10 @@ def compute_red_reward(
             honeypot_trigger_penalty=round(honeypot_trigger_penalty, 4),
             zone_progress_bonus=zone_progress_bonus,
             emergent_action_bonus=emergent_action_bonus,
+            subagent_spawns=red_subagent_spawns,
+            delegation_efficiency_bonus=delegation_efficiency_bonus,
+            spawn_cost_penalty=spawn_cost_penalty,
+            zone_stall_penalty=zone_stall_penalty,
             total=round(total, 4),
             episode_steps=int(getattr(state, "step", 0)),
             unique_nodes_visited=unique_nodes_visited,

@@ -123,6 +123,9 @@ class RedObservation:
     breadcrumb_nodes_nearby: list[int] = field(default_factory=list)
     # True when BLUE detection confidence spiked >0.20 without RED action (Change 9)
     detection_spike_this_step: bool = False
+    # The specific node RED must reach to exfiltrate — always provided so RED
+    # can navigate directly instead of wandering Zone 3 looking for the HVT.
+    hvt_node_id: int = -1
 
 
 @dataclass
@@ -177,6 +180,7 @@ def generate_red_observation(
     *args,
     dead_drop_paths: list[str] | None = None,
     context_reset_this_step: bool = False,
+    hvt_node_id: int = -1,
     **kwargs,
 ) -> RedObservation:
     """
@@ -343,6 +347,8 @@ def generate_red_observation(
         exfiltrated_files=list(state.red_exfiltrated_files),
         breadcrumb_nodes_nearby=breadcrumb_nodes_nearby,
         detection_spike_this_step=detection_spike,
+        # HVT node — provided so RED can navigate directly without wandering Zone 3.
+        hvt_node_id=hvt_node_id,
     )
 
 

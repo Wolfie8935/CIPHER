@@ -25,6 +25,10 @@ class BlueRewardComponents:
     trap_accuracy_bonus: float = 0.0
     emergent_action_bonus: float = 0.0
     investigation_effectiveness: float = 0.0
+    # v2 architecture: subagent delegation accounting
+    subagent_spawns: int = 0
+    delegation_efficiency_bonus: float = 0.0
+    spawn_cost_penalty: float = 0.0
     total: float = 0.0
 
 
@@ -96,7 +100,18 @@ def compute_blue_reward(
         fp_count = int(getattr(state, "blue_false_positives", 0))
         total_alerts = int(getattr(state, "blue_total_alerts", 0))
         if total_alerts == 0:
-            false_positive_rate_penalty = 0.0
+            # Fall back to anomaly history when alert counters aren't populated
+            # (e.g. in tests or in stub mode where TRIGGER_ALERT is rarely issued).
+            # is_red_planted=True means RED placed a deceptive lure → BLUE was
+            # fooled → that counts as a false positive for BLUE.
+            history = list(getattr(state, "blue_anomaly_history", []) or [])
+            if history:
+                fp_from_history = sum(
+                    1 for e in history if e.get("is_red_planted", False)
+                )
+                false_positive_rate_penalty = min(1.0, fp_from_history / max(1, len(history)))
+            else:
+                false_positive_rate_penalty = 0.0
         else:
             # Scales 0→1: 0 FPs = no penalty, all FPs = full penalty
             false_positive_rate_penalty = min(1.0, fp_count / max(1, total_alerts))
@@ -167,6 +182,28 @@ def compute_blue_reward(
                 min(0.4, (_productive / max(1, len(_inv_entries))) * 0.5), 4
             )
 
+        # v2 delegation accounting (gated behind env_reward_delegation_enabled)
+        blue_subagent_spawns = sum(
+            1
+            for entry in getattr(state, "episode_log", [])
+            if entry.get("action_type") == "subagent_spawn"
+            and str((entry.get("payload") or {}).get("team", "")) == "blue"
+        )
+        delegation_efficiency_bonus = 0.0
+        spawn_cost_penalty = 0.0
+        if bool(getattr(cfg, "env_reward_delegation_enabled", False)):
+            blue_outcome = (
+                detection_accuracy_score
+                + 0.5 * operation_graph_reconstruction_score
+                + 0.5 * trap_accuracy_bonus
+            )
+            if blue_subagent_spawns > 0 and blue_outcome > 0.0:
+                delegation_efficiency_bonus = round(
+                    min(0.15, blue_outcome / max(1.0, blue_subagent_spawns) * 0.4),
+                    4,
+                )
+            spawn_cost_penalty = round(-0.01 * blue_subagent_spawns, 4)
+
         total = (
             detection_accuracy_score
             * response_speed_bonus
@@ -175,6 +212,8 @@ def compute_blue_reward(
             + trap_accuracy_bonus
             + emergent_action_bonus
             + investigation_effectiveness
+            + delegation_efficiency_bonus
+            + spawn_cost_penalty
         ) - false_positive_rate_penalty
 
         logger.debug("BLUE reward component detection_accuracy_score=%.4f", detection_accuracy_score)
@@ -201,6 +240,9 @@ def compute_blue_reward(
             trap_accuracy_bonus=round(trap_accuracy_bonus, 4),
             emergent_action_bonus=emergent_action_bonus,
             investigation_effectiveness=investigation_effectiveness,
+            subagent_spawns=blue_subagent_spawns,
+            delegation_efficiency_bonus=delegation_efficiency_bonus,
+            spawn_cost_penalty=spawn_cost_penalty,
             total=round(total, 4),
         )
     except Exception as exc:

@@ -2,10 +2,12 @@
 """
 CIPHER — Adversarial Multi-Agent RL Environment
 ================================================
-RED team (4 AI agents, including trained LoRA specialist) infiltrates a
-50-node enterprise network to steal a classified file.
-BLUE team (4 AI agents) defends using honeypots, traps, and forensics.
-An Oversight Auditor judges both teams after every episode.
+RED COMMANDER (1 trained brain) orchestrates N dynamic subagents that
+infiltrate a 50-node enterprise network to steal a classified file.
+BLUE COMMANDER (1 trained brain) orchestrates N dynamic subagents that
+defend using honeypots, traps, and forensics.
+An Oversight Auditor (9th LLM) judges both teams after every episode.
+Architecture: CIPHER_AGENT_ARCH=v2 (commander + dynamic subagents).
 
 Usage:
   python main.py                          # 1 episode, stub mode
@@ -29,7 +31,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -85,10 +86,10 @@ def judge_demo_banner_ansi(llm_mode: str) -> str:
     sep = "╠" + "═" * _BOX_INNER + "╣"
     bot = "╚" + "═" * _BOX_INNER + "╝"
     footer = {
-        "live": "  8 LLM agents · 50-node network · Live inference     ",
-        "hybrid": "  8 LLM agents · 50-node network · Hybrid LoRA + API  ",
-        "stub": "  8 LLM agents · 50-node network · Stub policies      ",
-    }.get(llm_mode, "  8 LLM agents · 50-node network · Stub policies      ")
+        "live": "  2 Commanders + N subagents · 50-node network · Live  ",
+        "hybrid": "  2 Commanders + N subagents · Hybrid LoRA + API       ",
+        "stub": "  2 Commanders + N subagents · 50-node network · Stub  ",
+    }.get(llm_mode, "  2 Commanders + N subagents · 50-node network · Stub  ")
     footer = footer[:_BOX_INNER].ljust(_BOX_INNER)
     lines = [
         _ansi_framed_cap(border, top),
@@ -193,14 +194,14 @@ def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
                                difficulty: float, max_steps: int) -> None:
     """Print the episode battle header."""
     if mode == "hybrid":
-        red_label = "RED TEAM (Trained LoRA + 3 agents)"
-        mode_badge = "[bold red]HYBRID[/bold red] — RED Planner uses fine-tuned Llama-3.2-1B"
+        red_label = "RED COMMANDER + subagents (Hybrid LoRA)"
+        mode_badge = "[bold red]HYBRID[/bold red] — RED Commander uses trained LoRA; subagents via HF API"
     elif mode == "live":
-        red_label = "RED TEAM (4 × HuggingFace API agents)"
-        mode_badge = "[bold green]LIVE[/bold green] — All 8 agents use real LLM inference"
+        red_label = "RED COMMANDER + dynamic subagents (LLM)"
+        mode_badge = "[bold green]LIVE[/bold green] — Commanders + all subagents use real LLM inference"
     else:
-        red_label = "RED TEAM (4 agents, stub policy)"
-        mode_badge = "[bold dim]STUB[/bold dim] — Fast random/heuristic policies"
+        red_label = "RED COMMANDER + subagents (stub heuristics)"
+        mode_badge = "[bold dim]STUB[/bold dim] — Commander spawns default roster; heuristic policies"
 
     ep_label = f"Episode {episode_num}"
     if total_episodes > 1:
@@ -209,7 +210,7 @@ def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
     header = (
         f"[bold white]{'═' * 58}[/bold white]\n"
         f"  [bold cyan]C I P H E R[/bold cyan]  —  [bold white]{ep_label}[/bold white]\n"
-        f"  [bold red]{'🔴 ' + red_label:<35}[/bold red]  vs  [bold blue]🔵 BLUE TEAM (4 agents)[/bold blue]\n"
+        f"  [bold red]{'🔴 ' + red_label:<40}[/bold red]  vs  [bold blue]🔵 BLUE COMMANDER + subagents[/bold blue]\n"
         f"  Mode: {mode_badge}\n"
         f"  Network: [cyan]50 nodes[/cyan] | Zones: [cyan]4[/cyan] | "
         f"Difficulty: [yellow]{difficulty:.2f}[/yellow] | "
@@ -266,21 +267,27 @@ def _compute_zone_stall(state: Any) -> int:
 def _print_live_step(step: int, max_steps: int, red_actions: list,
                      blue_actions: list, state: Any, elapsed_s: float) -> None:
     """ANSI step ticker for live/hybrid (G.md Change 3 — colours + timer)."""
-    # Red planner's primary action
+    # Red commander / planner's primary action — prefer planner subagent, fall back to commander
     red_emergent_intent: str = ""
     red_info = "[dim]waiting…[/dim]"
-    for a in red_actions:
-        if a and a.agent_id.startswith("red_planner"):
-            atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
-            atype_lower = str(atype).lower()
-            node = f" → n{a.target_node}" if a.target_node is not None else ""
-            file_ = f" [{a.target_file[:18]}]" if a.target_file else ""
-            if atype == "emergent" and a.emergent_data:
-                red_emergent_intent = a.emergent_data.intent
-                red_info = f"[bold red]emergent:{red_emergent_intent}{node}[/bold red]"
-            else:
-                red_info = f"[red]{atype}{node}{file_}[/red]"
-            break
+    _red_primary = next(
+        (a for a in red_actions if a and a.agent_id.startswith("red_planner")), None
+    ) or next(
+        (a for a in red_actions if a and a.agent_id.startswith("red_commander")), None
+    ) or next(
+        (a for a in red_actions if a and str(getattr(a, "agent_id", "")).startswith("red_")), None
+    )
+    if _red_primary:
+        a = _red_primary
+        atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+        node = f" → n{a.target_node}" if a.target_node is not None else ""
+        file_ = f" [{a.target_file[:18]}]" if a.target_file else ""
+        role_tag = f"[{getattr(a, 'role', '') or a.agent_id.split('_')[1]}] " if getattr(a, "role", None) else ""
+        if atype == "emergent" and a.emergent_data:
+            red_emergent_intent = a.emergent_data.intent
+            red_info = f"[bold red]{role_tag}emergent:{red_emergent_intent}{node}[/bold red]"
+        else:
+            red_info = f"[red]{role_tag}{atype}{node}{file_}[/red]"
 
     # Blue dominant action — flag if any BLUE used emergent
     blue_counts: dict[str, int] = {}
@@ -368,6 +375,49 @@ def _print_live_step(step: int, max_steps: int, red_actions: list,
     # Feature flags line — shows exactly which new intelligence features fired this step
     if flags:
         console.print(f"  [dim]  └─ FLAGS:[/dim] {' │ '.join(flags)}")
+
+    # ── Subagent lifecycle events for this step ───────────────────────
+    # Pulled from episode_log entries tagged with action_type starting 'subagent_'
+    try:
+        ep_log = list(getattr(state, "episode_log", []) or [])
+        spawn_lines: list[str] = []
+        for entry in ep_log:
+            if entry.get("step") != step:
+                continue
+            atype = str(entry.get("action_type", ""))
+            if not atype.startswith("subagent_"):
+                continue
+            ev_type = atype.replace("subagent_", "")   # spawn / dismiss / expire / delegate / reject
+            payload = entry.get("payload") or entry.get("action_payload") or {}
+            role    = str(payload.get("role", "?"))
+            team    = str(payload.get("team", "?"))
+            sid     = str(entry.get("agent_id", "?"))
+            reason  = str(payload.get("reason", ""))[:60]
+
+            if ev_type == "spawn":
+                color = "bold red" if team == "red" else "bold blue"
+                brief = f" · {reason}" if reason else ""
+                spawn_lines.append(
+                    f"  [dim]  └─[/dim] [{color}]▶ SPAWN[/{color}] "
+                    f"[{color}]{sid}[/{color}] [dim]({role})[/dim]{brief}"
+                )
+            elif ev_type in ("dismiss", "expire"):
+                color = "red" if team == "red" else "blue"
+                label = "✕ DISMISS" if ev_type == "dismiss" else "⌛ EXPIRED"
+                spawn_lines.append(
+                    f"  [dim]  └─[/dim] [{color}]{label}[/{color}] "
+                    f"[dim]{sid} ({role})[/dim]"
+                )
+            elif ev_type == "delegate":
+                color = "red" if team == "red" else "blue"
+                spawn_lines.append(
+                    f"  [dim]  └─[/dim] [{color}]↺ DELEGATE[/{color}] "
+                    f"[dim]{sid} ({role}) · {reason}[/dim]"
+                )
+        for ln in spawn_lines:
+            console.print(ln)
+    except Exception:
+        pass
 
     # Exfiltration success banner
     if exfil_count > 0:
@@ -530,12 +580,16 @@ def _print_episode_battle(result: dict, episode_num: int, mode: str = "stub") ->
             f"  [bold green]emergent_bonus={red_em:+.3f}[/bold green]"
             if red_em > 0 else ""
         )
+        red_stall_str = ""
+        if getattr(rr, "zone_stall_penalty", 0.0) < 0:
+            red_stall_str = f"  stall_pen={rr.zone_stall_penalty:+.3f}"
         console.print(
             f"  [red]RED[/red]   total=[bold]{rr.total:+.3f}[/bold]  "
             f"exfil={getattr(rr,'exfiltration_completeness',0.0):+.3f}  "
             f"stealth={1.0 - getattr(rr,'detection_probability',0.0):+.3f}  "
             f"complexity={getattr(rr,'operation_complexity_multiplier',1.0):.2f}x  "
             f"abort_pen={getattr(rr,'abort_penalty',0.0):+.3f}"
+            + red_stall_str
             + red_em_str
         )
         # BLUE
@@ -622,12 +676,19 @@ def _get_step_callback_factory(run_id: str):
             _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
             try:
                 red_info = ""
-                for a in red_actions:
-                    if a and a.agent_id.startswith("red_planner"):
-                        atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
-                        node = f" → n{a.target_node}" if a.target_node is not None else ""
-                        red_info = f"{atype}{node}"
-                        break
+                # v2: prefer planner subagent, fall back to commander
+                _cb_red = next(
+                    (a for a in red_actions if a and a.agent_id.startswith("red_planner")), None
+                ) or next(
+                    (a for a in red_actions if a and a.agent_id.startswith("red_commander")), None
+                ) or next(
+                    (a for a in red_actions if a), None
+                )
+                if _cb_red:
+                    a = _cb_red
+                    atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                    node = f" → n{a.target_node}" if a.target_node is not None else ""
+                    red_info = f"{atype}{node}"
                 blue_counts: dict = {}
                 for a in blue_actions:
                     if a:
@@ -700,13 +761,16 @@ def _maybe_start_dashboard_process() -> None:
 
 
 def _auto_launch_dashboard(delay: float = 4.0) -> None:
-    """Open the Dash replay dashboard after a short delay (G.md Change 2)."""
+    """Print dashboard URL after a short delay — browser auto-open is disabled."""
     time.sleep(delay)
-    webbrowser.open("http://localhost:8050")
+    console.print(
+        f"  [dim cyan]Dashboard ready → http://localhost:8050  "
+        f"(open manually)[/dim cyan]"
+    )
 
 
 def _ensure_judge_dashboard(delay: float = 4.0) -> None:
-    """Spawn Dash on :8050 if needed and open browser (demo / live / hybrid)."""
+    """Spawn Dash on :8050 if needed; print URL (no auto browser open)."""
     _maybe_start_dashboard_process()
     threading.Thread(target=_auto_launch_dashboard, args=(delay,), daemon=True).start()
 
@@ -723,10 +787,12 @@ def _preload_hybrid_specialists() -> None:
     from cipher.utils.lora_client import LoRAClient
 
     specialists = [
-        ("red",  "planner",       "RED_PLANNER_LORA_PATH",       "red trained/cipher-red-planner-v1"),
-        ("red",  "analyst",       "RED_ANALYST_LORA_PATH",        "red trained/cipher-red-analyst-v1"),
-        ("blue", "surveillance",  "BLUE_SURVEILLANCE_LORA_PATH",  "blue trained/cipher-blue-surveillance-v1"),
-        ("blue", "threat_hunter", "BLUE_THREAT_HUNTER_LORA_PATH", "blue trained/cipher-blue-threat-hunter-v1"),
+        ("red",  "commander",     "RED_COMMANDER_LORA_PATH",      "red trained/cipher-red-commander-v1"),
+        ("blue", "commander",     "BLUE_COMMANDER_LORA_PATH",     "blue trained/cipher-blue-commander-v1"),
+        ("red",  "planner",       "RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v1"),
+        ("red",  "analyst",       "RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
+        ("blue", "surveillance",  "BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
+        ("blue", "threat_hunter", "BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
     ]
 
     client = LoRAClient()
@@ -748,7 +814,9 @@ def _preload_hybrid_specialists() -> None:
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
     specialists = {
-        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",        "red trained/cipher-red-planner-v1"),
+        "RED Commander":      os.getenv("RED_COMMANDER_LORA_PATH",       "red trained/cipher-red-commander-v1"),
+        "BLUE Commander":     os.getenv("BLUE_COMMANDER_LORA_PATH",      "blue trained/cipher-blue-commander-v1"),
+        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",         "red trained/cipher-red-planner-v1"),
         "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
         "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
         "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
@@ -1035,13 +1103,7 @@ def main() -> None:
             else:
                 console.print("  [dim]War Room API already running on port 5001[/dim]")
 
-        def _open_war_room(delay: float = 2.5) -> None:
-            time.sleep(delay)
-            webbrowser.open("http://localhost:5173")
-
-        # threading.Thread(target=_open_war_room, args=(2.5,), daemon=True).start()
-        # console.print("  [bold green]✓ Opening React War Room at http://localhost:5173 in 3s…[/bold green]")
-        # console.print("  [dim]  (run: cd dashboard-react && npm run dev  — if not already started)[/dim]\n")
+        console.print("  [dim]React War Room → http://localhost:5173  (run: cd dashboard-react && npm run dev)[/dim]\n")
 
     if args.train:
         from cipher.training.loop import TrainingLoop
@@ -1116,21 +1178,22 @@ def main() -> None:
         # For live/hybrid: inject a per-step callback so we print progress as it happens
         step_callback = None
         if mode in ("live", "hybrid"):
-            # Show episode memory summary so it's clear agents received it
+            # Show episode memory summary only in hybrid/train — live always starts fresh.
             try:
-                from cipher.training.episode_memory import get_recent_summary, count_consecutive_losses
-                ep_mem = get_recent_summary(n=3)
-                if ep_mem:
-                    console.print("  [bold cyan]── EPISODE MEMORY (injected into agent prompts) ──[/bold cyan]")
-                    for mem_line in ep_mem.splitlines():
-                        console.print(f"  [cyan]{mem_line}[/cyan]")
-                    console.print()
-                losses = count_consecutive_losses("red")
-                if losses >= 3:
-                    console.print(
-                        f"  [bold orange3]⚡ EXPLORATION PRESSURE: RED lost {losses} in a row "
-                        f"→ temperature raised to 0.9 + exploration directive injected[/bold orange3]\n"
-                    )
+                if mode == "hybrid":
+                    from cipher.training.episode_memory import get_recent_summary, count_consecutive_losses
+                    ep_mem = get_recent_summary(n=3)
+                    if ep_mem:
+                        console.print("  [bold cyan]── EPISODE MEMORY (injected into agent prompts) ──[/bold cyan]")
+                        for mem_line in ep_mem.splitlines():
+                            console.print(f"  [cyan]{mem_line}[/cyan]")
+                        console.print()
+                    losses = count_consecutive_losses("red")
+                    if losses >= 3:
+                        console.print(
+                            f"  [bold orange3]⚡ EXPLORATION PRESSURE: RED lost {losses} in a row "
+                            f"→ temperature raised to 0.9 + exploration directive injected[/bold orange3]\n"
+                        )
             except Exception:
                 pass
             console.print(

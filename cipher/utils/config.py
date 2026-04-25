@@ -149,6 +149,39 @@ class CipherConfig(BaseSettings):
     dashboard_live_port: int = Field(8051)
     dashboard_live_update_interval: int = Field(2000, description="Milliseconds")
 
+    # ── Commander / Subagent architecture (v2) ───────────────────
+    cipher_agent_arch: str = Field(
+        "v2",
+        description="Agent architecture: 'v1' = legacy 4+4 fixed roster, 'v2' = commander+subagents",
+    )
+    env_max_subagents_red: int = Field(
+        6, description="Max concurrent RED subagents alive at once"
+    )
+    env_max_subagents_blue: int = Field(
+        6, description="Max concurrent BLUE subagents alive at once"
+    )
+    env_subagent_spawn_budget_red: int = Field(
+        12, description="Max RED subagent spawns per episode"
+    )
+    env_subagent_spawn_budget_blue: int = Field(
+        12, description="Max BLUE subagent spawns per episode"
+    )
+    env_subagent_default_lifespan: int = Field(
+        5, description="Default steps before a subagent is auto-dismissed"
+    )
+    env_reward_delegation_enabled: bool = Field(
+        False,
+        description="When true, adds delegation_efficiency bonus and spawn_cost penalty to rewards",
+    )
+    hf_model_red_commander: str = Field(
+        "mistralai/Mistral-7B-Instruct-v0.3",
+        description="HF model for the RED Commander (top-level RED agent)",
+    )
+    hf_model_blue_commander: str = Field(
+        "Qwen/Qwen2.5-7B-Instruct",
+        description="HF model for the BLUE Commander (top-level BLUE agent)",
+    )
+
     def model_post_init(self, __context) -> None:
         if self.dashboard_live_update_interval <= 10:
             self.dashboard_live_update_interval *= 1000

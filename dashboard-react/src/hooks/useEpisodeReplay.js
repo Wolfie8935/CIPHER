@@ -91,10 +91,12 @@ export function useEpisodeReplay(filename, speed = 1) {
         const extracted = stepNums.map((stepNum, idx) => {
           const entries = stepGroups[stepNum];
 
-          // Red planner's intended target node
-          const plannerEntry = entries.find(e =>
-            e.agent_id?.includes('red_planner') && e.payload?.target_node != null
-          );
+          // Red planner's intended target node — prefer planner subagent,
+          // fall back to commander, then any RED entry with a target.
+          const plannerEntry =
+            entries.find(e => e.agent_id?.includes('red_planner') && e.payload?.target_node != null)
+            ?? entries.find(e => e.agent_id?.includes('red_commander') && e.payload?.target_node != null)
+            ?? entries.find(e => e.agent_id?.startsWith('red_') && e.payload?.target_node != null);
           const redNode = plannerEntry?.payload?.target_node ?? null;
 
           // Zone derived from graph node metadata
