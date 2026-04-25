@@ -1089,8 +1089,8 @@ def main() -> None:
     )
     parser.add_argument("--episodes", type=int, default=1,
                         help="Number of episodes to run (default: 1)")
-    parser.add_argument("--steps", type=int, default=30,
-                        help="Max steps per episode (default: 30)")
+    parser.add_argument("--steps", type=int, default=20,
+                        help="Max steps per episode (default: 20)")
     parser.add_argument("--live", action="store_true",
                         help="Use HuggingFace API for all agents")
     parser.add_argument("--hybrid", action="store_true",
@@ -1239,10 +1239,12 @@ def main() -> None:
     # Import episode runner after setting LLM_MODE
     from cipher.training._episode_runner import run_episode
     from cipher.environment.scenario import ScenarioGenerator
+    from cipher.environment.difficulty import DynamicDifficultyController
+    from cipher.environment.graph import generate_enterprise_graph
     from cipher.utils.config import config
 
     n_episodes = args.episodes
-    max_steps = args.steps          # always set (default 30)
+    max_steps = args.steps          # always set (default 20)
     runner_verbose = args.verbose   # False by default — main.py owns display
     save_trace = not args.no_trace
 
@@ -1271,10 +1273,16 @@ def main() -> None:
         console.print()
 
     scenario_gen = ScenarioGenerator()
+    difficulty_ctrl = DynamicDifficultyController(initial_difficulty=0.30, max_steps=max_steps)
+    _current_dp: dict = {}          # difficulty params for this episode
     start_time = perf_counter()
 
     for ep_num in range(1, n_episodes + 1):
+        # Compute difficulty for this episode (updates immediately after each win/loss)
+        _current_dp = difficulty_ctrl.compute_next_difficulty()
         scenario = scenario_gen.generate(ep_num)
+        # Override scenario difficulty from DDC
+        scenario.difficulty = _current_dp["difficulty"]
 
         _print_competition_header(
             episode_num=ep_num,
@@ -1314,15 +1322,24 @@ def main() -> None:
             factory = _get_step_callback_factory(run_id)
             step_callback = factory(ep_num)
 
+        # Rebuild graph using DDC difficulty params (honeypot_density + graph_size vary)
+        _hp_density = _current_dp.get("honeypot_density", config.env_honeypot_density)
+        _g_size     = _current_dp.get("graph_size", config.env_graph_size)
+        _ep_graph   = generate_enterprise_graph(
+            n_nodes=_g_size,
+            honeypot_density=_hp_density,
+            seed=scenario.episode_seed,
+        )
         result = run_episode(
             scenario=scenario,
-            graph=scenario.generated_graph,
+            graph=_ep_graph,
             cfg=config,
             max_steps=max_steps,
             verbose=runner_verbose,
             save_trace=save_trace,
             episode_number=ep_num,
             step_callback=step_callback,
+            difficulty_params=_current_dp,
         )
 
         ep_elapsed = perf_counter() - ep_start
@@ -1334,6 +1351,30 @@ def main() -> None:
 
         if isinstance(result, dict):
             _print_episode_battle(result, ep_num, mode=mode)
+
+            # ── Feed result back into difficulty controller ────────────────
+            try:
+                _rr = result.get("red_reward")
+                _br = result.get("blue_reward")
+                _st = result.get("state")
+                _red_total = float(_rr.total) if hasattr(_rr, "total") else float(_rr or 0)
+                difficulty_ctrl.record_episode({
+                    "red_reward":  _red_total,
+                    "steps":       int(getattr(_st, "step", max_steps)),
+                    "max_steps":   max_steps,
+                    "max_zone":    int(getattr(_st, "red_current_zone", 0) or 0),
+                    "traps_triggered": len(getattr(_st, "trap_events_log", []) or []),
+                })
+                # Also keep ScenarioGenerator in sync
+                _terminal = str(getattr(_st, "terminal_reason", "max_steps"))
+                _winner = (
+                    "red"  if _terminal == "exfiltration_complete"
+                    else "blue" if _terminal in ("detected", "aborted")
+                    else "draw"
+                )
+                scenario_gen.escalate_difficulty(_winner)
+            except Exception:
+                pass
 
             # ── Narrative post-mortem ──────────────────────────────────────
             try:

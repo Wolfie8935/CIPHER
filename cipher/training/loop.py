@@ -20,6 +20,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from cipher.environment.difficulty import DynamicDifficultyController
 from cipher.environment.graph import generate_enterprise_graph
 from cipher.environment.scenario import ScenarioGenerator
 from cipher.training.prompt_evolver import PromptEvolver
@@ -176,6 +177,7 @@ class TrainingLoop:
 
         logger.info(f"Starting training loop: {self.n_episodes} episodes")
         scenario_generator = ScenarioGenerator()
+        difficulty_ctrl = DynamicDifficultyController(window_size=10, max_steps=self.max_steps)
         training_start_time = datetime.now().isoformat()
         red_update_count = 0
         blue_update_count = 0
@@ -196,6 +198,14 @@ class TrainingLoop:
 
         for episode_num in range(1, self.n_episodes + 1):
             logger.info(f"═══ Training Episode {episode_num}/{self.n_episodes} ═══")
+            # Compute adaptive difficulty before this episode
+            difficulty_params = difficulty_ctrl.compute_next_difficulty()
+            logger.debug(
+                f"Difficulty {difficulty_params['difficulty']:.2f} | "
+                f"win_rate={difficulty_params['win_rate_window']:.0%} | "
+                f"hp={difficulty_params['honeypot_density']:.2f} "
+                f"nodes={difficulty_params['graph_size']}"
+            )
             scenario = scenario_generator.generate(episode_num)
 
             try:
@@ -229,8 +239,8 @@ class TrainingLoop:
 
             try:
                 graph = generate_enterprise_graph(
-                    n_nodes=config.env_graph_size,
-                    honeypot_density=config.env_honeypot_density,
+                    n_nodes=difficulty_params["graph_size"],
+                    honeypot_density=difficulty_params["honeypot_density"],
                     seed=scenario.episode_seed,
                 )
                 cb = step_callback_factory(episode_num) if step_callback_factory else None
@@ -242,10 +252,33 @@ class TrainingLoop:
                     max_steps=self.max_steps,
                     verbose=False,
                     step_callback=cb,
+                    difficulty_params=difficulty_params,
                 )
                 red_total = result["red_reward"].total
                 blue_total = result["blue_reward"].total
                 state = result["state"]
+
+                # Record episode outcome in difficulty controller
+                _max_zone = int(getattr(state, "red_current_zone", 0) or 0)
+                _traps = len(getattr(state, "trap_events_log", []) or [])
+                difficulty_ctrl.record_episode({
+                    "red_reward":      red_total,
+                    "blue_reward":     blue_total,
+                    "steps":           int(getattr(state, "step", 0)),
+                    "max_steps":       self.max_steps,
+                    "max_zone":        _max_zone,
+                    "traps_triggered": _traps,
+                    "emergent_count":  0,
+                })
+                # Also advance the scenario generator's own difficulty tracker
+                _tr = str(getattr(state, "terminal_reason", "max_steps"))
+                _winner = (
+                    "red"  if _tr == "exfiltration_complete"
+                    else "blue" if _tr in ("detected", "aborted")
+                    else "draw"
+                )
+                scenario_generator.escalate_difficulty(_winner)
+
                 log_reward(
                     logger,
                     f"Episode {episode_num}: RED={red_total:.4f}  BLUE={blue_total:.4f}",
