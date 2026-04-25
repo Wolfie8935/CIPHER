@@ -107,14 +107,14 @@ def _call_llm(prompt: str) -> str | None:
     try:
         from openai import OpenAI
 
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        api_key = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("HF_BASE_URL", "https://api-inference.huggingface.co/v1/")
 
         if not api_key:
             return None
 
         client = OpenAI(api_key=api_key, base_url=base_url)
-        model = os.getenv("STORYTELLER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+        model = os.getenv("STORYTELLER_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct")
 
         response = client.chat.completions.create(
             model=model,

@@ -64,6 +64,27 @@ from cipher.utils.logger import get_logger
 logger = get_logger(__name__)
 console = Console(force_terminal=True)
 _EPISODE_HISTORY: list[dict[str, Any]] = []
+_THOUGHTS_FILE = Path("logs") / "agent_thoughts.jsonl"
+
+
+def _log_agent_thought(step: int, action: "Action") -> None:
+    """Append one agent reasoning entry to agent_thoughts.jsonl for the war room."""
+    try:
+        _THOUGHTS_FILE.parent.mkdir(exist_ok=True)
+        entry = {
+            "step":        step,
+            "agent_id":    action.agent_id,
+            "team":        "red" if str(action.agent_id).startswith("red") else "blue",
+            "reasoning":   (action.reasoning or "")[:500],
+            "action_type": action.action_type.value if hasattr(action.action_type, "value") else str(action.action_type),
+            "target_node": action.target_node,
+            "target_file": action.target_file,
+            "timestamp":   datetime.now().isoformat(),
+        }
+        with open(_THOUGHTS_FILE, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 RED_TRAP_ACTIONS = {
     ActionType.PLANT_FALSE_TRAIL,
@@ -349,6 +370,7 @@ def run_episode(
                 },
                 result=result,
             )
+            _log_agent_thought(step, action)
             if debug_trace_state or os.getenv("DEBUG_EXFIL", "0") == "1":
                 logger.debug(
                     "EXFIL STATE step=%s after %s: %s",
@@ -450,6 +472,7 @@ def run_episode(
                 },
                 result=result,
             )
+            _log_agent_thought(step, action)
             if verbose:
                 _print_action(step, action, state, "blue")
 
@@ -1174,7 +1197,10 @@ def _save_episode_trace(
 
     traces_dir = Path("episode_traces")
     traces_dir.mkdir(exist_ok=True)
-    trace_path = traces_dir / f"episode_{episode_number:04d}.json"
+    
+    mode = os.environ.get("LLM_MODE", "stub")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trace_path = traces_dir / f"episode_{episode_number:03d}_{ts}_{mode}.json"
 
     try:
         from networkx.readwrite import json_graph

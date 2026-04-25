@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 class BlueSurveillance(BaseAgent):
     """BLUE team Surveillance — real-time anomaly monitor and correlator."""
 
-    _model_env_key = "nvidia_model_blue_surv"
+    _model_env_key = "hf_model_blue_surv"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "blue", "surveillance", config)

@@ -4,19 +4,16 @@ cipher/utils/llm_client.py
 Unified LLM client for CIPHER.
 
 Supported backends (set LLM_BACKEND in .env):
-  nvidia  — NVIDIA NIM API (default, all agents)
-  local   — OpenAI-compatible local server (all agents use LOCAL_MODEL_URL)
-  hybrid  — RED Planner uses LOCAL_MODEL_URL, all other agents use NVIDIA NIM
-             This is the live-competition mode after RunPod training.
+  hf      — HuggingFace Inference API (default, OpenAI-compatible)
+  local   — OpenAI-compatible local server (LM Studio / vllm)
+  hybrid  — RED Planner uses LoRA from disk, all other agents use HF
 
 This is the ONLY file that imports openai or makes HTTP calls to any LLM.
-All 8 agents call this. The Oversight agent calls this. Nothing else does.
 """
 from __future__ import annotations
 
 import time
 import json
-from typing import Any
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 from cipher.utils.config import config
 from cipher.utils.logger import get_logger
@@ -24,93 +21,61 @@ from cipher.utils.llm_mode import get_llm_mode
 
 logger = get_logger(__name__)
 
-# Model env keys that route to the local model in hybrid mode
-_LOCAL_KEYS_IN_HYBRID = {"nvidia_model_red_planner"}
+# Model keys that route to the LoRA model in hybrid mode
+_LOCAL_KEYS_IN_HYBRID = {"hf_model_red_planner"}
 
 
 class LLMClient:
     """
-    Routes LLM calls to NVIDIA NIM, a local server, or both (hybrid).
+    Routes LLM calls to HuggingFace Inference API, a local server, or both (hybrid).
 
     Handles:
     - Backend routing per agent role
     - Retry logic with exponential backoff (3 attempts)
     - Rate limit handling (waits and retries on 429)
     - Malformed response handling (safe WAIT fallback)
-    - Token counting and logging
     """
 
-    MAX_RETRIES = 3          # up to 3 attempts before fallback
-    RETRY_BASE_DELAY = 1.0
-    REQUEST_TIMEOUT = 12.0   # 12s per call max; fallback on timeout
+    MAX_RETRIES       = 3
+    RETRY_BASE_DELAY  = 1.0
+    REQUEST_TIMEOUT   = 25.0
 
     def __init__(self) -> None:
         configured_backend = str(config.llm_backend).strip().lower()
         runtime_mode = get_llm_mode()
+
         if runtime_mode == "hybrid":
             self.backend = "hybrid"
-        elif configured_backend in {"nvidia", "local", "hybrid"}:
+        elif configured_backend in {"hf", "local", "hybrid"}:
             self.backend = configured_backend
         else:
-            self.backend = "nvidia"
+            self.backend = "hf"
 
-        if self.backend == "nvidia":
-            _extra_headers = {}
-            if "openrouter" in config.nvidia_base_url:
-                # OpenRouter requires these headers to identify the calling app.
-                _extra_headers = {
-                    "HTTP-Referer": "https://github.com/Wolfie8935/CIPHER",
-                    "X-Title": "CIPHER-MARL",
-                }
-            self._nvidia = OpenAI(
-                base_url=config.nvidia_base_url,
-                api_key=config.nvidia_api_key,
+        if self.backend in {"hf", "hybrid"}:
+            self._hf = OpenAI(
+                base_url=config.hf_base_url,
+                api_key=config.hf_token or "hf_placeholder",
                 timeout=self.REQUEST_TIMEOUT,
-                default_headers=_extra_headers if _extra_headers else None,
             )
             self._local = None
 
         elif self.backend == "local":
-            self._nvidia = None
+            self._hf = None
             self._local = OpenAI(
                 base_url=config.local_model_url,
-                api_key="local",  # most local servers accept any non-empty key
+                api_key="local",
                 timeout=self.REQUEST_TIMEOUT,
             )
 
-        elif self.backend == "hybrid":
-            # RED Planner uses the trained local LoRA model loaded directly from disk.
-            # Other agents use NVIDIA NIM. No local server (LM Studio/vLLM) required.
-            _extra_headers = {}
-            if "openrouter" in config.nvidia_base_url:
-                _extra_headers = {
-                    "HTTP-Referer": "https://github.com/Wolfie8935/CIPHER",
-                    "X-Title": "CIPHER-MARL",
-                }
-            self._nvidia = OpenAI(
-                base_url=config.nvidia_base_url,
-                api_key=config.nvidia_api_key,
-                timeout=self.REQUEST_TIMEOUT,
-                default_headers=_extra_headers if _extra_headers else None,
-            )
-            self._local = None  # LoRAClient loads from disk; no local server needed
+        if self.backend == "hybrid":
             import os as _os
             self._lora_adapter_path = _os.getenv(
                 "RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"
             )
 
-        else:
-            raise NotImplementedError(
-                f"LLM backend '{self.backend}' is not supported. "
-                "Valid options: nvidia | local | hybrid"
-            )
-
         logger.info(f"LLMClient initialized: backend={self.backend}")
         if self.backend == "hybrid":
-            logger.info(
-                f"Hybrid routing: {_LOCAL_KEYS_IN_HYBRID} -> LoRA ({self._lora_adapter_path}), "
-                "all other agents -> NVIDIA/OpenRouter."
-            )
+            logger.info(f"Hybrid: RED Planner -> LoRA ({self._lora_adapter_path}), others -> HF.")
 
     def complete(
         self,
@@ -122,21 +87,18 @@ class LLMClient:
         team: str = "red",
     ) -> str:
         """
-        Make a completion request, routed to the correct backend.
+        Make a completion request routed to the correct backend.
 
         Args:
-            model_env_key: Config attribute name, e.g. "nvidia_model_red_planner".
-                In nvidia/hybrid mode this maps to a model name via config lookup.
-                In local/hybrid-local mode the local_model_name is used instead.
+            model_env_key: Config attribute name, e.g. "hf_model_red_planner".
             messages: OpenAI-format message list.
             max_tokens: Max tokens in response.
             temperature: Sampling temperature.
-            expect_json: If True, appends JSON reminder and validates response.
+            expect_json: Appends JSON reminder and validates response.
 
         Returns:
-            Model response as string. Never raises — returns fallback WAIT/STAND_DOWN on failure.
+            Model response string. Never raises — returns fallback on failure.
         """
-        # In hybrid mode, specialist keys use the LoRA model directly — no local server needed.
         if self.backend == "hybrid" and model_env_key.lower() in _LOCAL_KEYS_IN_HYBRID:
             return self._lora_complete(messages, team=team, max_tokens=max_tokens, temperature=temperature)
 
@@ -166,7 +128,7 @@ class LLMClient:
                 content = response.choices[0].message.content.strip()
 
                 logger.debug(
-                    f"LLM response: model={model_name}, "
+                    f"LLM: model={model_name}, "
                     f"tokens={response.usage.total_tokens if response.usage else '?'}, "
                     f"time={elapsed:.2f}s"
                 )
@@ -176,9 +138,7 @@ class LLMClient:
                     try:
                         json.loads(content)
                     except json.JSONDecodeError as e:
-                        logger.warning(
-                            f"Invalid JSON (attempt {attempt}): {e}. Raw: {content[:200]}"
-                        )
+                        logger.warning(f"Invalid JSON (attempt {attempt}): {e}. Raw: {content[:200]}")
                         if attempt == self.MAX_RETRIES:
                             return self._fallback_action(team)
                         time.sleep(self.RETRY_BASE_DELAY * attempt)
@@ -188,7 +148,7 @@ class LLMClient:
 
             except RateLimitError:
                 wait = self.RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning(f"Rate limit (attempt {attempt}). Waiting {wait}s.")
+                logger.warning(f"Rate limit (attempt {attempt}). Waiting {wait:.1f}s.")
                 if attempt < self.MAX_RETRIES:
                     time.sleep(wait)
 
@@ -204,11 +164,10 @@ class LLMClient:
 
             except Exception as e:
                 err_str = str(e)
-                # Fast-fail on 404: bad model name will never succeed — don't waste retries
                 if "404" in err_str or "NotFoundError" in type(e).__name__:
                     logger.error(
                         f"Model not found (404) for '{model_name}'. "
-                        f"Check NVIDIA_MODEL_* values in .env. Falling back immediately."
+                        "Check HF_MODEL_* values in .env. Falling back immediately."
                     )
                     return self._fallback_action(team)
                 logger.error(f"Unexpected LLM error (attempt {attempt}): {type(e).__name__}: {e}")
@@ -218,10 +177,22 @@ class LLMClient:
 
         return self._fallback_action(team)
 
-
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
+
+    def _resolve(self, model_env_key: str) -> tuple[OpenAI | None, str | None]:
+        """Return (client, model_name) for the given key and current backend."""
+        key = model_env_key.lower()
+
+        if self.backend in {"hf", "hybrid"}:
+            model_name = getattr(config, key, None)
+            return self._hf, model_name
+
+        elif self.backend == "local":
+            return self._local, config.local_model_name
+
+        return None, None
 
     def _lora_complete(self, messages: list[dict[str, str]], team: str = "red",
                        max_tokens: int = 256, temperature: float = 0.7) -> str:
@@ -239,29 +210,8 @@ class LLMClient:
             logger.error(f"LoRA inference failed: {e}")
             return self._fallback_action(team)
 
-    def _resolve(self, model_env_key: str) -> tuple[OpenAI | None, str | None]:
-        """Return (client, model_name) for the given model key and current backend."""
-        key = model_env_key.lower()
-
-        if self.backend == "nvidia":
-            model_name = getattr(config, key, None)
-            return self._nvidia, model_name
-
-        elif self.backend == "local":
-            return self._local, config.local_model_name
-
-        elif self.backend == "hybrid":
-            # Local keys are handled by _lora_complete() before _resolve() is called;
-            # this branch is only reached for NIM-routed agents.
-            model_name = getattr(config, key, None)
-            return self._nvidia, model_name
-
-        return None, None
-
     @staticmethod
     def _fallback_action(team: str = "red") -> str:
-        """Return a safe WAIT/STAND_DOWN action JSON as a fallback when the LLM fails."""
-        # BLUE team does NOT have a 'wait' action — use stand_down instead
         action = "wait" if team == "red" else "stand_down"
         return json.dumps({
             "action_type": action,
@@ -272,40 +222,31 @@ class LLMClient:
 
     @staticmethod
     def _strip_json_fences(text: str) -> str:
-        """Strip markdown code fences and repair literal newlines inside JSON string values."""
+        """Strip markdown code fences and repair bare newlines inside JSON strings."""
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
-            text = "\n".join(
-                line for line in lines
-                if not line.strip().startswith("```")
-            ).strip()
-        # LLMs sometimes wrap long string values with literal newlines, which breaks JSON.
-        # Walk char-by-char: replace bare \n/\r inside quoted strings with a space.
+            text = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
         result: list[str] = []
         in_string = False
         escape_next = False
         for ch in text:
             if escape_next:
-                result.append(ch)
-                escape_next = False
+                result.append(ch); escape_next = False
             elif ch == "\\":
-                result.append(ch)
-                escape_next = True
+                result.append(ch); escape_next = True
             elif ch == '"':
-                result.append(ch)
-                in_string = not in_string
+                result.append(ch); in_string = not in_string
             elif in_string and ch in ("\n", "\r"):
                 result.append(" ")
             else:
                 result.append(ch)
-        
-        final_text = "".join(result).strip()
+        final = "".join(result).strip()
         if in_string:
-            final_text += '"'
-        if final_text.startswith("{") and not final_text.endswith("}"):
-            final_text += "}"
-        return final_text
+            final += '"'
+        if final.startswith("{") and not final.endswith("}"):
+            final += "}"
+        return final
 
 
 _llm_client_instance: "LLMClient | None" = None

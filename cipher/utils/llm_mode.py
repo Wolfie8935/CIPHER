@@ -5,8 +5,8 @@ Controls whether agents use real LLM calls or fall back to stub (random) behavio
 
 Modes:
   stub   — Random/heuristic actions. No API calls. Instant. Default.
-  live   — All 8 agents use NVIDIA NIM API.
-  hybrid — RED Planner uses local fine-tuned LoRA. Other 7 agents use NVIDIA NIM.
+  live   — All 8 agents use HuggingFace Inference API.
+  hybrid — RED Planner uses local fine-tuned LoRA. Other 7 agents use HuggingFace API.
 """
 from __future__ import annotations
 import os
@@ -28,9 +28,9 @@ def get_llm_mode() -> str:
 
 def is_live_mode() -> bool:
     """
-    Returns True if agents should use the NVIDIA NIM API.
+    Returns True if agents should use the HuggingFace Inference API.
     True for both 'live' and 'hybrid' modes — in hybrid, non-specialist
-    agents still use NIM.
+    agents still use the HF API.
     """
     return get_llm_mode() in ("live", "hybrid")
 

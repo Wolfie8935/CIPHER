@@ -110,7 +110,7 @@ def generate_proof_of_learning_report(eval_json: dict[str, Any]) -> str:
                 f"After fine-tuning RED Planner and RED Analyst with LoRA "
                 f"(Group Relative Policy Optimisation — GRPO), the CIPHER RED team "
                 f"demonstrates measurably improved infiltration and exfiltration performance "
-                f"compared to the zero-shot NIM-only baseline. "
+                f"compared to the zero-shot HF-only baseline. "
                 f"The trained models show more efficient network traversal "
                 f"({steps_delta} average steps) and improved stealth."
             ),
@@ -188,8 +188,8 @@ def generate_proof_of_learning_report(eval_json: dict[str, Any]) -> str:
         f"- **Max steps**: {max_s} steps per episode (standard CIPHER episode length).",
         "- **Graph**: 50-node enterprise network, 4 security zones (Perimeter → General → Sensitive → Critical/HVT).",
         "- **Difficulty**: Scenario difficulty sampled uniformly — same seed distribution across modes for fair comparison.",
-        "- **Baseline (stub / live)**: All 8 agents use NVIDIA NIM zero-shot prompts — no trained weights.",
-        "- **Hybrid**: RED Planner + RED Analyst use fine-tuned LoRA adapters (trained via GRPO on CIPHER reward signal); remaining agents use NIM.",
+        "- **Baseline (stub / live)**: All 8 agents use HuggingFace Inference API zero-shot prompts — no trained weights.",
+        "- **Hybrid**: RED Planner + RED Analyst use fine-tuned LoRA adapters (trained via GRPO on CIPHER reward signal); remaining agents use HF API.",
         "- **Evaluation script**: `cipher/training/eval_runner.py` — deterministic, reproducible.",
         "",
         "---",

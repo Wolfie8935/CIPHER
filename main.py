@@ -11,7 +11,7 @@ Usage:
   python main.py                          # 1 episode, stub mode
   python main.py --episodes 5            # 5-episode competition
   python main.py --steps 30              # longer episodes
-  python main.py --live                  # all agents use NVIDIA NIM
+  python main.py --live                  # all agents use HuggingFace API
   python main.py --hybrid                # RED Planner uses trained LoRA
   python main.py --train                 # training loop (10 episodes)
   python main.py --debug                 # show all agent debug logs
@@ -120,7 +120,7 @@ def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
         red_label = "RED TEAM (Trained LoRA + 3 agents)"
         mode_badge = "[bold red]HYBRID[/bold red] — RED Planner uses fine-tuned Llama-3.2-1B"
     elif mode == "live":
-        red_label = "RED TEAM (4 × NVIDIA NIM agents)"
+        red_label = "RED TEAM (4 × HuggingFace API agents)"
         mode_badge = "[bold green]LIVE[/bold green] — All 8 agents use real LLM inference"
     else:
         red_label = "RED TEAM (4 agents, stub policy)"
@@ -433,17 +433,7 @@ def _write_agent_status(data: dict) -> None:
         pass
 
 
-def _rename_trace(ep_num: int, mode: str) -> None:
-    """Rename episode_NNNN.json → episode_NNN_TIMESTAMP_MODE.json after saving."""
-    traces_dir = Path("episode_traces")
-    old_path = traces_dir / f"episode_{ep_num:04d}.json"
-    if old_path.exists():
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_path = traces_dir / f"episode_{ep_num:03d}_{ts}_{mode}.json"
-        try:
-            old_path.rename(new_path)
-        except Exception:
-            pass
+
 
 
 def _get_step_callback_factory(run_id: str):
@@ -564,7 +554,7 @@ def _preload_hybrid_specialists() -> None:
     for team, role, env_key, default_path in specialists:
         adapter_path = os.getenv(env_key, default_path)
         if not os.path.exists(adapter_path):
-            continue  # Not found — will fall back to NIM at runtime
+            continue  # Not found — will fall back to HF API at runtime
         try:
             client._load(adapter_path)  # No-op if already cached
             any_loaded = True
@@ -588,7 +578,7 @@ def _validate_hybrid_models() -> None:
         if os.path.exists(path):
             console.print(f"    [green]✓[/green] {name}: [dim]{path}[/dim]")
         else:
-            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use NVIDIA NIM")
+            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use HF API")
     console.print()
 
 
@@ -682,8 +672,7 @@ def _run_demo_mode(max_steps: int = 30, save_trace: bool = True) -> None:
             except Exception:
                 pass
 
-        if save_trace:
-            _rename_trace(ep_num, mode)
+
 
         _write_run_state({
             "status": "running",
@@ -729,9 +718,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=30,
                         help="Max steps per episode (default: 30)")
     parser.add_argument("--live", action="store_true",
-                        help="Use NVIDIA NIM for all agents")
+                        help="Use HuggingFace API for all agents")
     parser.add_argument("--hybrid", action="store_true",
-                        help="RED Planner uses trained LoRA, others use NIM")
+                        help="RED Planner uses trained LoRA, others use HF API")
     parser.add_argument("--train", action="store_true",
                         help="Run training loop (updates prompts every 5 episodes)")
     parser.add_argument("--train-episodes", type=int, default=10,
@@ -803,9 +792,9 @@ def main() -> None:
         console.print("[bold cyan]Starting dashboard in background…[/bold cyan]")
         _maybe_start_dashboard_process()
         # Open browser after 5 seconds (gives dashboard time to start)
-        t = threading.Thread(target=_auto_launch_dashboard, args=(5.0,), daemon=True)
-        t.start()
-        console.print("[dim]Dashboard will open at http://localhost:8050 in ~5s[/dim]\n")
+        # t = threading.Thread(target=_auto_launch_dashboard, args=(5.0,), daemon=True)
+        # t.start()
+        # console.print("[dim]Dashboard will open at http://localhost:8050 in ~5s[/dim]\n")
         _run_demo_mode(max_steps=args.steps, save_trace=not args.no_trace)
         return
 
@@ -815,9 +804,46 @@ def main() -> None:
     except Exception:
         pass
 
+    # Clear previous thoughts file for a clean session
+    try:
+        thoughts_path = Path("logs") / "agent_thoughts.jsonl"
+        thoughts_path.parent.mkdir(exist_ok=True)
+        thoughts_path.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+    # ── Auto-launch React War Room for --live / --hybrid ─────────────────
+    if mode in ("live", "hybrid"):
+        # Serialize initial graph topology once scenario is generated later;
+        # start the Flask API server now so the React app can connect.
+        def _run_war_room_api() -> None:
+            import importlib.util, sys as _sys
+            api_path = Path(__file__).parent / "dashboard-react" / "api_server.py"
+            if api_path.exists():
+                spec = importlib.util.spec_from_file_location("api_server", api_path)
+                mod  = importlib.util.module_from_spec(spec)
+                _sys.modules["api_server"] = mod
+                spec.loader.exec_module(mod)
+                mod.app.run(host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _s:
+            if _s.connect_ex(("localhost", 5001)) != 0:
+                threading.Thread(target=_run_war_room_api, daemon=True).start()
+                console.print("  [bold cyan]✓ War Room API started on http://localhost:5001[/bold cyan]")
+            else:
+                console.print("  [dim]War Room API already running on port 5001[/dim]")
+
+        def _open_war_room(delay: float = 2.5) -> None:
+            time.sleep(delay)
+            webbrowser.open("http://localhost:5173")
+
+        # threading.Thread(target=_open_war_room, args=(2.5,), daemon=True).start()
+        # console.print("  [bold green]✓ Opening React War Room at http://localhost:5173 in 3s…[/bold green]")
+        # console.print("  [dim]  (run: cd dashboard-react && npm run dev  — if not already started)[/dim]\n")
+
     # ── Auto-launch dashboard ONLY for --demo (not --live/--hybrid) ─────
     # Use  python main.py --demo  to open the browser dashboard.
-    # Running --hybrid or --live from the terminal does NOT open a browser.
+    # Running --hybrid or --live from the terminal opens the React war room instead.
 
     if args.train:
         from cipher.training.loop import TrainingLoop
@@ -977,9 +1003,7 @@ def main() -> None:
                 except Exception as _ve:
                     console.print(f"  [dim]Video generation skipped: {_ve}[/dim]")
 
-        # Rename trace to include timestamp + mode for dashboard trace selector
-        if save_trace:
-            _rename_trace(ep_num, mode)
+
 
         # Update dashboard state after each episode
         _write_run_state({
@@ -992,7 +1016,7 @@ def main() -> None:
             "last_updated": datetime.now().isoformat(),
         })
 
-    # Estimate API cost (OpenRouter; stub = $0)
+    # Estimate API cost (HuggingFace; stub = $0)
     total_steps_run = n_episodes * max_steps
     if mode == "live":
         # ~8 agents × ~800 tokens/call × $0.80/1M tokens (approx)

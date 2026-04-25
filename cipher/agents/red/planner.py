@@ -29,7 +29,7 @@ class RedPlanner(BaseAgent):
     RED team Planner — mission architect and abort authority.
     """
 
-    _model_env_key = "nvidia_model_red_planner"
+    _model_env_key = "hf_model_red_planner"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "red", "planner", config)

@@ -28,7 +28,7 @@ def infer_runtime_mode(episode_data: dict | None = None) -> str:
     # Explicit mode always wins (main.py now sets this deterministically).
     if mode:
         return mode.upper()
-    if backend in {"nvidia", "openai", "huggingface"}:
+    if backend in {"hf", "openai", "huggingface"}:
         return f"LIVE ({backend.upper()})"
 
     return "UNKNOWN"

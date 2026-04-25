@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 class BlueDeceptionArchitect(BaseAgent):
     """BLUE team Deception Architect — honeypot and trap designer."""
 
-    _model_env_key = "nvidia_model_blue_deceiver"
+    _model_env_key = "hf_model_blue_deceiver"
 
     def __init__(self, agent_id: str, config: CipherConfig) -> None:
         super().__init__(agent_id, "blue", "deception_architect", config)

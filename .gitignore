@@ -1,31 +1,61 @@
 # CIPHER — Gitignore
+
+# ── Secrets & environment ─────────────────────────────────────────────────────
 .env
+*.key
+*.pem
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.conda/
+
+# ── Node / React dashboard ────────────────────────────────────────────────────
+dashboard-react/node_modules/
+dashboard-react/dist/
+dashboard-react/.vite/
+
+# ── CIPHER runtime data ───────────────────────────────────────────────────────
 cipher/memory/drop_vault/*.drop
 cipher/memory/drop_vault/vault_index.json
 episode_traces/
-*.egg-info/
-dist/
-build/
-.eggs/
-*.egg
-.venv/
-venv/
-
-# ── Generated assets (video highlights & narrative reports) ──────────────────
-episode_highlights/
-episode_reports/
-
-# ── Temp / upload scratch ─────────────────────────────────────────────────────
-tmp_hf_upload/
-
-# ── Logs & data ───────────────────────────────────────────────────────────────
-logs/
-data/finetune/
+training_state.json
 run_state.json
 training_events.json
+training_events.jsonl
+live_steps.jsonl
+telemetry.db
+rewards_log.csv
+
+# ── Generated assets ──────────────────────────────────────────────────────────
+episode_highlights/
+episode_reports/
+data/finetune/
+logs/
+
+# ── Model checkpoints & LoRA adapters ────────────────────────────────────────
+red trained/
+blue trained/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# ── Upload scratch ────────────────────────────────────────────────────────────
+tmp_hf_upload/
 
 # ── OS / editor ───────────────────────────────────────────────────────────────
 .DS_Store
@@ -34,4 +64,3 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
-training_state.json
