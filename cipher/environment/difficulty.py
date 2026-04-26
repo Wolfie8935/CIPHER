@@ -89,16 +89,22 @@ class DynamicDifficultyController:
 
     # ── Computation ─────────────────────────────────────────────────
 
+    MIN_DIFFICULTY: float = 0.30   # hard floor — never drop below this
+    MAX_DIFFICULTY: float = 0.90
+
+    RED_WIN_DELTA:  float = +0.15  # RED wins  → increase difficulty by 0.15
+    BLUE_WIN_DELTA: float = -0.05  # BLUE wins → decrease difficulty by 0.05
+
     def compute_next_difficulty(self) -> dict[str, Any]:
         """
         Compute difficulty parameters for the next episode.
 
-        Applies immediately after every episode — no warm-up window needed.
-        - RED wins  → difficulty += 0.10  (noticeably harder next episode)
-        - BLUE wins → difficulty -= 0.05  (noticeably easier next episode)
-        - No result yet → return current defaults unchanged
-
-        When the window has 3+ episodes, also smooths using rolling win-rate.
+        Rules (applied in all modes — stub, live, hybrid, training):
+          - RED wins  → difficulty += 0.15
+          - BLUE wins → difficulty -= 0.05
+          - difficulty never drops below 0.30 (min floor)
+          - difficulty never rises above 0.90 (max cap)
+          - No history yet → return current defaults unchanged
         """
         if not self.history:
             return self._default_params()
@@ -106,31 +112,11 @@ class DynamicDifficultyController:
         n = len(self.history)
         win_rate = sum(1 for h in self.history if h["red_won"]) / n
         last = self.history[-1]
-        sf = last["steps_fraction"]      # 0.0 (instant) → 1.0 (full max_steps used)
 
-        # Behavior-based delta — reacts to how the episode actually played out:
-        if last["red_won"]:
-            # RED won quickly (sf low)  → was very easy → jump difficulty up hard
-            # RED won slowly (sf high)  → was a real fight → smaller increase
-            delta = 0.05 + 0.15 * (1.0 - sf)
-            # sf=0.30 (6/20 steps) → delta ≈ +0.16   (episode too easy)
-            # sf=0.75 (15/20 steps) → delta ≈ +0.09  (good fight but RED won)
-        else:
-            # BLUE won quickly (sf low)  → was too hard for RED → ease off a lot
-            # BLUE won slowly (sf high)  → tough fight, RED almost made it → ease slightly
-            delta = -(0.15 * (1.0 - sf) + 0.02)
-            # sf=0.20 (4/20 steps) → delta ≈ -0.14  (BLUE too dominant)
-            # sf=0.80 (16/20 steps) → delta ≈ -0.05  (close fight, slight ease)
+        delta = self.RED_WIN_DELTA if last["red_won"] else self.BLUE_WIN_DELTA
 
-        # Long-window correction: if win-rate is very skewed over 5+ episodes,
-        # nudge further regardless of last episode
-        if n >= 5:
-            if win_rate > 0.75:
-                delta += 0.05
-            elif win_rate < 0.20:
-                delta -= 0.03
-
-        self.current_difficulty = max(0.10, min(0.90, self.current_difficulty + delta))
+        new_d = self.current_difficulty + delta
+        self.current_difficulty = max(self.MIN_DIFFICULTY, min(self.MAX_DIFFICULTY, new_d))
         return self._params_from_difficulty(self.current_difficulty, win_rate)
 
     def _params_from_difficulty(

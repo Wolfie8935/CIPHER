@@ -2100,3 +2100,32 @@
 {"episode": 10, "timestamp": "2026-04-26T09:27:20.980855", "event_type": "abort", "team": "red", "trap_type": null, "node": null, "step": 5, "detail": "Episode aborted by RED"}
 {"episode": 10, "event_type": "prompt_evolved", "detail": "Evolution #77: RED +0 rules, BLUE +1 rules", "timestamp": "2026-04-26T03:57:21.719229", "step": 0, "agent": "prompt_evolver", "team": "system"}
 {"episode": 10, "timestamp": "2026-04-26T09:27:21.719735", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 5, "detail": "Episode 10 ended: aborted | RED=-0.200 BLUE=-0.132"}
+{"episode": 10, "timestamp": "2026-04-26T10:44:33.621853", "event_type": "trap_fired", "team": "blue", "trap_type": "false_escalation", "node": 28, "step": 3, "detail": "BLUE trap false_escalation triggered"}
+{"episode": 10, "event_type": "prompt_evolved", "detail": "Evolution #78: RED +0 rules, BLUE +1 rules", "timestamp": "2026-04-26T05:14:34.008566", "step": 0, "agent": "prompt_evolver", "team": "system"}
+{"episode": 10, "timestamp": "2026-04-26T10:44:34.008651", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 10 ended: detected | RED=+0.000 BLUE=+0.283"}
+{"episode": 1, "timestamp": "2026-04-26T10:45:05.046125", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 1 started (difficulty=0.30)"}
+{"episode": 1, "timestamp": "2026-04-26T10:45:12.806222", "event_type": "oversight_flag", "team": "oversight", "trap_type": null, "node": null, "step": 1, "detail": "BLUE stood down despite remaining trap budget."}
+{"episode": 1, "timestamp": "2026-04-26T10:45:12.806436", "event_type": "oversight_flag", "team": "oversight", "trap_type": null, "node": null, "step": 2, "detail": "BLUE stood down despite remaining trap budget."}
+{"episode": 1, "timestamp": "2026-04-26T10:45:13.413476", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 6, "detail": "Episode 1 ended: detected | RED=+0.397 BLUE=-0.181"}
+{"episode": 2, "timestamp": "2026-04-26T10:45:13.425105", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 2 started (difficulty=0.30)"}
+{"episode": 2, "timestamp": "2026-04-26T10:45:22.358782", "event_type": "oversight_flag", "team": "oversight", "trap_type": null, "node": null, "step": 1, "detail": "BLUE stood down despite remaining trap budget."}
+{"episode": 2, "timestamp": "2026-04-26T10:45:23.158171", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 7, "detail": "Episode 2 ended: detected | RED=+0.100 BLUE=-0.064"}
+{"episode": 3, "timestamp": "2026-04-26T10:45:23.170034", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 3 started (difficulty=0.30)"}
+{"episode": 3, "timestamp": "2026-04-26T10:45:32.382891", "event_type": "oversight_flag", "team": "oversight", "trap_type": null, "node": null, "step": 1, "detail": "BLUE stood down despite remaining trap budget."}
+{"episode": 3, "timestamp": "2026-04-26T10:45:32.813074", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 7, "detail": "Episode 3 ended: detected | RED=+0.100 BLUE=-0.150"}
+{"episode": 4, "timestamp": "2026-04-26T10:45:32.825629", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 4 started (difficulty=0.30)"}
+{"episode": 4, "timestamp": "2026-04-26T10:45:41.275105", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 6, "detail": "Episode 4 ended: detected | RED=+0.100 BLUE=+0.392"}
+{"episode": 5, "timestamp": "2026-04-26T10:45:41.286560", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 5 started (difficulty=0.30)"}
+{"episode": 5, "event_type": "prompt_evolved", "detail": "Evolution #79: RED +0 rules, BLUE +1 rules", "timestamp": "2026-04-26T05:15:47.233616", "step": 0, "agent": "prompt_evolver", "team": "system"}
+{"episode": 5, "timestamp": "2026-04-26T10:45:47.233730", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 5 ended: detected | RED=+0.050 BLUE=+0.198"}
+{"episode": 6, "timestamp": "2026-04-26T10:45:47.238082", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 6 started (difficulty=0.30)"}
+{"episode": 6, "timestamp": "2026-04-26T10:45:53.694340", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 6 ended: detected | RED=+0.050 BLUE=+0.135"}
+{"episode": 7, "timestamp": "2026-04-26T10:45:53.706536", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 7 started (difficulty=0.30)"}
+{"episode": 7, "timestamp": "2026-04-26T10:46:00.240723", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 7 ended: detected | RED=+0.000 BLUE=+0.026"}
+{"episode": 8, "timestamp": "2026-04-26T10:46:00.249619", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 8 started (difficulty=0.30)"}
+{"episode": 8, "timestamp": "2026-04-26T10:46:15.475901", "event_type": "trap_fired", "team": "red", "trap_type": "false_trail", "node": 48, "step": 6, "detail": "RED trap false_trail triggered"}
+{"episode": 8, "timestamp": "2026-04-26T10:46:15.810022", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 10, "detail": "Episode 8 ended: exfiltration_complete | RED=+0.707 BLUE=-0.316"}
+{"episode": 9, "timestamp": "2026-04-26T10:46:15.822599", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 9 started (difficulty=0.45)"}
+{"episode": 9, "timestamp": "2026-04-26T10:46:21.665779", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 9 ended: detected | RED=+0.000 BLUE=+0.116"}
+{"episode": 10, "timestamp": "2026-04-26T10:46:21.678595", "event_type": "episode_start", "team": null, "trap_type": null, "node": null, "step": 0, "detail": "Episode 10 started (difficulty=0.40)"}
+{"episode": 10, "timestamp": "2026-04-26T10:46:28.203279", "event_type": "episode_end", "team": null, "trap_type": null, "node": null, "step": 4, "detail": "Episode 10 ended: detected | RED=+0.050 BLUE=-0.152"}

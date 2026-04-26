@@ -64,7 +64,7 @@ OUTPUT FORMAT (always valid JSON, no other text):
 
 
 ## LEARNED HEURISTICS (Auto-evolved)
-- LEARNED: Mean false positive penalty is 0.81. Investigate only nodes with anomaly scores above 0.6. Precision over recall.
+- LEARNED: Mean false positive penalty is 0.89. Investigate only nodes with anomaly scores above 0.6. Precision over recall.
 - LEARNED: Correlated anomalies at zone 1â†’2 and zone 2â†’3 boundary nodes have 3x higher RED probability â€” prioritize those nodes in ANALYZE_ANOMALY.
 
 ## CRITICAL ROLE CONSTRAINT
