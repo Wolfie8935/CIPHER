@@ -117,9 +117,11 @@ def upload_specialists(repo_id: str = HF_REPO_ID, dry_run: bool = False) -> dict
 
 def upload_traces(traces_dir: str = "episode_traces",
                   repo_id: str = HF_TRACES_REPO,
-                  dry_run: bool = False) -> int:
+                  dry_run: bool = False,
+                  batch_size: int = 50) -> int:
     """
     Upload episode traces JSON files to a Hugging Face Dataset repo.
+    Files are committed in batches of `batch_size` to stay within rate limits.
     Returns count of uploaded files.
     """
     api = _get_api()
@@ -141,24 +143,30 @@ def upload_traces(traces_dir: str = "episode_traces",
         except Exception as e:
             print(f"  [WARN] Could not create dataset repo: {e}")
 
-    uploaded = 0
-    for tf in trace_files:
-        if dry_run:
+    if dry_run:
+        for tf in trace_files:
             print(f"  [DRY]  Would upload trace {tf.name}")
-            uploaded += 1
-        else:
-            try:
-                api.upload_file(
-                    path_or_fileobj=str(tf),
-                    path_in_repo=f"traces/{tf.name}",
-                    repo_id=repo_id,
-                    repo_type="dataset",
-                    commit_message=f"Add trace {tf.name}",
-                )
-                uploaded += 1
-                print(f"  [OK]   Uploaded {tf.name}")
-            except Exception as e:
-                print(f"  [ERR]  {tf.name}: {e}")
+        return len(trace_files)
+
+    from huggingface_hub import CommitOperationAdd
+    uploaded = 0
+    for i in range(0, len(trace_files), batch_size):
+        batch = trace_files[i:i + batch_size]
+        ops = [
+            CommitOperationAdd(path_in_repo=f"traces/{tf.name}", path_or_fileobj=str(tf))
+            for tf in batch
+        ]
+        try:
+            api.create_commit(
+                repo_id=repo_id,
+                repo_type="dataset",
+                operations=ops,
+                commit_message=f"Add traces batch {i // batch_size + 1} ({len(batch)} files)",
+            )
+            uploaded += len(batch)
+            print(f"  [OK]   Batch {i // batch_size + 1}: {len(batch)} traces uploaded")
+        except Exception as e:
+            print(f"  [ERR]  Batch {i // batch_size + 1}: {e}")
 
     return uploaded
 
@@ -216,6 +224,51 @@ def maybe_push_episode_trace(trace_path: str | Path, *, dry_run: bool = False) -
     if not _env_push_traces_enabled():
         return False
     return upload_episode_trace_file(trace_path, dry_run=dry_run)
+
+
+def push_live_data(root_dir: str | Path = ".", *, repo_id: str | None = None) -> bool:
+    """
+    Upload live_steps.jsonl, logs/agent_status.json, and rewards_log.csv to the
+    HF Dataset under live/ — all in ONE commit to avoid rate-limit issues.
+
+    Called in a background daemon thread after each step (non-blocking from caller).
+    Always no-ops if CIPHER_PUSH_TRACES_HF is not set.
+    """
+    if not _env_push_traces_enabled():
+        return False
+    root = Path(root_dir)
+    rid = repo_id or HF_TRACES_REPO
+    try:
+        from huggingface_hub import CommitOperationAdd
+        api = _get_api()
+        try:
+            from huggingface_hub import create_repo
+            create_repo(rid, repo_type="dataset", exist_ok=True)
+        except Exception:
+            pass
+
+        uploads = [
+            (root / "live_steps.jsonl",          "live/live_steps.jsonl"),
+            (root / "logs" / "agent_status.json", "live/agent_status.json"),
+            (root / "rewards_log.csv",             "live/rewards_log.csv"),
+        ]
+        ops = []
+        for src, dest in uploads:
+            if src.exists() and src.stat().st_size > 0:
+                ops.append(CommitOperationAdd(path_in_repo=dest, path_or_fileobj=str(src)))
+
+        if not ops:
+            return False
+        api.create_commit(
+            repo_id=rid,
+            repo_type="dataset",
+            operations=ops,
+            commit_message="live update",
+        )
+        return True
+    except Exception as e:
+        print(f"  [WARN] push_live_data: {e}", flush=True)
+        return False
 
 
 def upload_reports(reports_dir: str = "episode_reports",

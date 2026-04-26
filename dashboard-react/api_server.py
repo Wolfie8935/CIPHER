@@ -25,6 +25,166 @@ ROOT     = _HERE.parent          # project root
 app  = Flask(__name__)
 CORS(app)
 
+# ── Background episode state ─────────────────────────────────────────
+_training_lock    = threading.Lock()
+_training_running = False
+
+
+def _fetch_hf_live_file(filename: str) -> bytes | None:
+    """Download a live data file from HF Dataset (fallback when local file is empty)."""
+    repo_id = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
+    token   = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
+    if not token:
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+        local = hf_hub_download(
+            repo_id=repo_id,
+            filename=f"live/{filename}",
+            repo_type="dataset",
+            token=token,
+            force_download=True,       # always fetch freshest copy
+        )
+        return Path(local).read_bytes()
+    except Exception:
+        return None
+
+
+def _run_bg_episode() -> None:
+    """Run one CIPHER episode in background — triggered by /api/control start."""
+    global _training_running
+    ts_path = ROOT / "training_state.json"
+    try:
+        sys.path.insert(0, str(ROOT))
+        from cipher.training._episode_runner import run_episode
+
+        run_id = f"hf_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Clear stale live data
+        (ROOT / "live_steps.jsonl").write_text("", encoding="utf-8")
+        (ROOT / "logs").mkdir(exist_ok=True)
+        (ROOT / "logs" / "agent_thoughts.jsonl").write_text("", encoding="utf-8")
+
+        ts = {
+            "status": "running",
+            "run_id": run_id,
+            "current_episode": 1,
+            "total_episodes": 1,
+            "llm_mode": os.getenv("LLM_MODE", "stub"),
+            "started_at": datetime.now().isoformat(),
+            "last_updated": datetime.now().isoformat(),
+            "total_steps": 0,
+        }
+        ts_path.write_text(json.dumps(ts, indent=2), encoding="utf-8")
+        print(f"[START] Background episode starting (run_id={run_id})", flush=True)
+
+        # Build a simple step callback that writes live_steps.jsonl
+        def _step_cb(step, max_steps, red_actions, blue_actions, state):
+            try:
+                from datetime import datetime as _dt
+                ra = red_actions[0] if red_actions else None
+                red_info = ""
+                if ra:
+                    atype = ra.action_type.value if hasattr(ra.action_type, "value") else str(ra.action_type)
+                    node = f" → n{ra.target_node}" if ra.target_node is not None else ""
+                    red_info = f"{atype}{node}"
+                blue_counts: dict = {}
+                for a in blue_actions:
+                    if a:
+                        k = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                        blue_counts[k] = blue_counts.get(k, 0) + 1
+                blue_info = " ".join(f"{k}×{v}" for k, v in blue_counts.items())
+                zone_raw = state.graph.nodes[state.red_current_node].get("zone", 0)
+                zone_val = getattr(zone_raw, "value", zone_raw) if zone_raw is not None else 0
+                zone_names = {0: "Perimeter", 1: "General", 2: "Sensitive", 3: "Critical/HVT"}
+                zone_label = zone_names.get(int(zone_val or 0), "Unknown")
+                susp = round(float(getattr(state, "red_suspicion_score", 0.0)), 3)
+                det  = round(float(getattr(state, "blue_detection_confidence", 0.0)), 3)
+                exfil = list(getattr(state, "red_exfiltrated_files", []))
+                _all_agents = []
+                for a in (red_actions or []) + (blue_actions or []):
+                    if not a:
+                        continue
+                    atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                    _all_agents.append({
+                        "agent_id": a.agent_id,
+                        "team": "red" if str(a.agent_id).startswith("red") else "blue",
+                        "action_type": atype,
+                        "target_node": a.target_node,
+                    })
+                step_data = {
+                    "run_id": run_id, "episode": 1, "step": step, "max_steps": max_steps,
+                    "red_action": red_info or "waiting", "blue_actions": blue_info or "—",
+                    "suspicion": susp, "detection": det, "zone": zone_label,
+                    "exfil_count": len(exfil), "exfil_files": exfil[-3:],
+                    "timestamp": _dt.now().isoformat(), "all_agents": _all_agents,
+                }
+                with open(ROOT / "live_steps.jsonl", "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(step_data) + "\n")
+                # Update training_state step counter
+                ts["total_steps"] = step
+                ts["last_updated"] = _dt.now().isoformat()
+                ts_path.write_text(json.dumps(ts, indent=2), encoding="utf-8")
+                # Write agent_status
+                agents_detail = {}
+                for a in (red_actions or []) + (blue_actions or []):
+                    if a:
+                        atype = a.action_type.value if hasattr(a.action_type, "value") else str(a.action_type)
+                        agents_detail[a.agent_id] = {
+                            "action": atype, "node": a.target_node,
+                            "team": "red" if str(a.agent_id).startswith("red") else "blue",
+                        }
+                (ROOT / "logs" / "agent_status.json").write_text(
+                    json.dumps({
+                        "run_id": run_id, "episode": 1, "step": step,
+                        "suspicion": susp, "detection": det, "zone": zone_label,
+                        "agents": agents_detail, "timestamp": _dt.now().isoformat(),
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+                print(f"[STEP] {step}/{max_steps} | ep=1 | sus={susp:.2f} | det={det:.2f}", flush=True)
+                # Push to HF Hub in background (non-blocking)
+                if step % 2 == 0:
+                    try:
+                        from cipher.utils.hf_uploader import push_live_data
+                        threading.Thread(target=push_live_data, daemon=True).start()
+                    except Exception:
+                        pass
+            except Exception as _cb_err:
+                print(f"[WARN] step_cb error: {_cb_err}", flush=True)
+
+        run_episode(
+            episode_number=1,
+            max_steps=int(os.getenv("HF_EPISODE_MAX_STEPS", "20")),
+            verbose=True,
+            save_trace=True,
+            step_callback=_step_cb,
+        )
+
+        ts["status"] = "complete"
+        ts["last_updated"] = datetime.now().isoformat()
+        ts_path.write_text(json.dumps(ts, indent=2), encoding="utf-8")
+        print("[END] Background episode complete", flush=True)
+
+        # Push final data to HF Hub
+        try:
+            from cipher.utils.hf_uploader import push_live_data
+            push_live_data(root_dir=ROOT)
+        except Exception:
+            pass
+
+    except Exception as exc:
+        print(f"[ERROR] Background episode failed: {exc}", flush=True)
+        try:
+            state = json.loads(ts_path.read_text(encoding="utf-8")) if ts_path.exists() else {}
+            state["status"] = "error"
+            state["error"] = str(exc)
+            ts_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    finally:
+        with _training_lock:
+            _training_running = False
+
 
 # ── Serve React app from dist/ ───────────────────────────────────────
 def _serve_react(subpath='index.html'):
@@ -92,6 +252,15 @@ def _read_json(path: Path) -> dict:
 @app.route("/api/live-steps")
 def live_steps():
     data = _read_jsonl(ROOT / "live_steps.jsonl", last_n=50)
+    if not data:
+        raw = _fetch_hf_live_file("live_steps.jsonl")
+        if raw:
+            lines = raw.decode("utf-8", errors="ignore").strip().split("\n")
+            for ln in lines[-50:]:
+                try:
+                    data.append(json.loads(ln))
+                except Exception:
+                    pass
     return jsonify(data)
 
 
@@ -103,7 +272,15 @@ def thoughts():
 
 @app.route("/api/agent-status")
 def agent_status():
-    return jsonify(_read_json(ROOT / "logs" / "agent_status.json"))
+    data = _read_json(ROOT / "logs" / "agent_status.json")
+    if not data:
+        raw = _fetch_hf_live_file("agent_status.json")
+        if raw:
+            try:
+                data = json.loads(raw.decode("utf-8", errors="ignore"))
+            except Exception:
+                pass
+    return jsonify(data)
 
 
 @app.route("/api/architecture-doc")
@@ -471,23 +648,26 @@ def health():
 
 @app.route("/api/control", methods=["POST"])
 def control():
-    """Start / Step / Reset control endpoint for the HF Space UI."""
+    """Start / Step / Reset control endpoint for the HF Space UI and local War Room."""
+    global _training_running
     data = request.get_json(silent=True) or {}
     action = str(data.get("action", "")).strip().lower()
     ts_path = ROOT / "training_state.json"
 
     if action == "start":
-        state = _read_json(ts_path) or {}
-        state.update({
-            "status": "starting",
-            "control_action": "start",
-            "control_timestamp": datetime.now().isoformat(),
-        })
-        ts_path.write_text(json.dumps(state, indent=2))
-        print("[START] Control: start action received via /api/control", flush=True)
-        return jsonify({"ok": True, "action": "start", "message": "Training start requested."})
+        with _training_lock:
+            already = _training_running
+            if not already:
+                _training_running = True
+                threading.Thread(target=_run_bg_episode, daemon=True).start()
+        if already:
+            return jsonify({"ok": False, "action": "start", "message": "Episode already running."})
+        print("[START] Control: background episode launched", flush=True)
+        return jsonify({"ok": True, "action": "start", "message": "Episode started — watch the dashboard update live."})
 
     elif action == "reset":
+        with _training_lock:
+            _training_running = False
         state = _read_json(ts_path) or {}
         state.update({
             "status": "idle",
@@ -496,12 +676,12 @@ def control():
             "current_episode": 0,
             "total_steps": 0,
         })
-        ts_path.write_text(json.dumps(state, indent=2))
-        live_path = ROOT / "live_steps.jsonl"
-        if live_path.exists():
-            live_path.write_text("")
-        print("[RESET] Control: reset action received via /api/control", flush=True)
-        return jsonify({"ok": True, "action": "reset", "message": "Environment reset."})
+        ts_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        for p in [ROOT / "live_steps.jsonl", ROOT / "logs" / "agent_thoughts.jsonl"]:
+            if p.exists():
+                p.write_text("", encoding="utf-8")
+        print("[RESET] Control: environment reset", flush=True)
+        return jsonify({"ok": True, "action": "reset", "message": "Environment reset. Click ▶ START to run an episode."})
 
     elif action == "step":
         state = _read_json(ts_path) or {}
@@ -509,8 +689,8 @@ def control():
             "control_action": "step",
             "control_timestamp": datetime.now().isoformat(),
         })
-        ts_path.write_text(json.dumps(state, indent=2))
-        print("[STEP] Control: step action received via /api/control", flush=True)
+        ts_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        print("[STEP] Control: step action received", flush=True)
         return jsonify({"ok": True, "action": "step", "message": "Step requested."})
 
     return jsonify({"ok": False, "error": f"Unknown action: {action!r}. Use start|step|reset."}), 400

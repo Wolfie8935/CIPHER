@@ -884,6 +884,14 @@ def _get_step_callback_factory(run_id: str):
                     "agents": agents_detail,
                     "timestamp": datetime.now().isoformat(),
                 })
+
+                # Push live data to HF Dataset every 2 steps (background, non-blocking)
+                if step % 2 == 0:
+                    try:
+                        from cipher.utils.hf_uploader import push_live_data
+                        threading.Thread(target=push_live_data, daemon=True).start()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         return _cb
