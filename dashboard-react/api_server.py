@@ -219,6 +219,27 @@ def vite_svg():
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
+def _read_rewards() -> list[dict]:
+    """Read rewards_log.csv from local disk; fall back to HF Dataset live/ folder."""
+    import io as _io
+    path = ROOT / "rewards_log.csv"
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+                if rows:
+                    return rows
+        except Exception:
+            pass
+    raw = _fetch_hf_live_file("rewards_log.csv")
+    if raw:
+        try:
+            return list(csv.DictReader(_io.StringIO(raw.decode("utf-8", errors="ignore"))))
+        except Exception:
+            pass
+    return []
+
+
 def _read_jsonl(path: Path, last_n: int = 50) -> list:
     if not path.exists():
         return []
@@ -581,14 +602,7 @@ def get_episode(filename):
 
 @app.route("/api/rewards")
 def rewards():
-    path = ROOT / "rewards_log.csv"
-    if not path.exists():
-        return jsonify([])
-    try:
-        with open(path, encoding="utf-8") as f:
-            return jsonify(list(csv.DictReader(f)))
-    except Exception:
-        return jsonify([])
+    return jsonify(_read_rewards())
 
 
 @app.route("/api/commanders")
@@ -1084,18 +1098,7 @@ def rl_stats():
     - RED/BLUE component averages
     - difficulty curve (if training_state.json has it)
     """
-    path = ROOT / "rewards_log.csv"
-    rows = []
-    if path.exists():
-        try:
-            import csv as _csv
-            with open(path, encoding="utf-8") as f:
-                reader = _csv.DictReader(f)
-                for row in reader:
-                    rows.append(row)
-        except Exception:
-            pass
-
+    rows = _read_rewards()
     if not rows:
         return jsonify({
             "episodes": [], "red_totals": [], "blue_totals": [],
@@ -1228,14 +1231,7 @@ def rl_stats():
 @app.route("/api/history")
 def history():
     """Cross-run episode history for React parity with Dash History tab."""
-    path = ROOT / "rewards_log.csv"
-    rows = []
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as f:
-                rows = list(csv.DictReader(f))
-        except Exception:
-            rows = []
+    rows = _read_rewards()
 
     def _f(v, default=0.0):
         try:
@@ -1275,14 +1271,7 @@ def analytics():
     - Terminal reason distribution
     - Trap hot nodes (from training_events)
     """
-    rewards_path = ROOT / "rewards_log.csv"
-    reward_rows = []
-    if rewards_path.exists():
-        try:
-            with open(rewards_path, encoding="utf-8") as f:
-                reward_rows = list(csv.DictReader(f))
-        except Exception:
-            reward_rows = []
+    reward_rows = _read_rewards()
 
     def _f(v, default=0.0):
         try:

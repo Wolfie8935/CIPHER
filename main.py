@@ -742,14 +742,15 @@ def _write_agent_status(data: dict) -> None:
 
 
 
-def _get_step_callback_factory(run_id: str):
+def _get_step_callback_factory(run_id: str, *, silent: bool = False):
     def factory(ep_num: int):
         _ep_start_ref = [perf_counter()]
         def _cb(step, max_steps, red_actions, blue_actions, state):
             if step == 1:
                 _ep_start_ref[0] = perf_counter()
             elapsed = perf_counter() - _ep_start_ref[0]
-            _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
+            if not silent:
+                _print_live_step(step, max_steps, red_actions, blue_actions, state, elapsed)
             try:
                 red_info = ""
                 # v2: prefer planner subagent, fall back to commander
@@ -1164,6 +1165,11 @@ def main() -> None:
     except Exception:
         pass
 
+    # Auto-enable HF push when BACKEND_URL points to HF Space
+    _backend_url = os.getenv("BACKEND_URL", "").strip()
+    if _backend_url and (".hf.space" in _backend_url or "huggingface.co" in _backend_url):
+        os.environ.setdefault("CIPHER_PUSH_TRACES_HF", "1")
+
     if args.live:
         mode = "live"
     elif args.hybrid:
@@ -1173,6 +1179,7 @@ def main() -> None:
         _m = os.environ.get("LLM_MODE", "stub").strip().lower()
         mode = _m if _m in ("live", "hybrid", "stub") else "stub"
     os.environ["LLM_MODE"] = mode
+    _push_hf = os.getenv("CIPHER_PUSH_TRACES_HF", "").strip().lower() in ("1", "true", "yes", "on")
 
     # Change 11: validate specialist model paths when running hybrid
     if mode == "hybrid":
@@ -1261,17 +1268,32 @@ def main() -> None:
         n = args.train_episodes
         if "--episodes" in sys.argv:
             n = args.episodes
-        
+
         console.print(
             f"[bold cyan]CIPHER Training Loop[/bold cyan] — {n} episodes"
         )
-        factory = _get_step_callback_factory(run_id) if mode in ("live", "hybrid") else None
-        if factory:
+        if mode in ("live", "hybrid"):
+            factory = _get_step_callback_factory(run_id)
             console.print("  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n")
+        elif _push_hf:
+            factory = _get_step_callback_factory(run_id, silent=True)
+        else:
+            factory = None
+
         TrainingLoop(n_episodes=n, max_steps=args.steps).run(
             step_callback_factory=factory,
             generate_video=args.video,
         )
+
+        # Push rewards_log.csv + live files to HF so dashboard reflects training results
+        if _push_hf:
+            try:
+                from cipher.utils.hf_uploader import push_live_data
+                console.print("  [dim]Pushing training results to HF Dataset…[/dim]")
+                push_live_data()
+                console.print("  [bold green]✓ Training results pushed to HF[/bold green]")
+            except Exception as _pe:
+                console.print(f"  [yellow]HF push failed: {_pe}[/yellow]")
         return
 
     # Import episode runner after setting LLM_MODE
@@ -1333,7 +1355,7 @@ def main() -> None:
         ep_start = perf_counter()
         _step_times: list[float] = []
 
-        # For live/hybrid: inject a per-step callback so we print progress as it happens
+        # Inject per-step callback: prints live ticker in live/hybrid, silently pushes in stub+HF
         step_callback = None
         if mode in ("live", "hybrid"):
             # Show episode memory summary only in hybrid/train — live always starts fresh.
@@ -1358,6 +1380,9 @@ def main() -> None:
                 f"  [dim]Calling LLM agents in parallel — step ticker will print below:[/dim]\n"
             )
             factory = _get_step_callback_factory(run_id)
+            step_callback = factory(ep_num)
+        elif _push_hf:
+            factory = _get_step_callback_factory(run_id, silent=True)
             step_callback = factory(ep_num)
 
         # Rebuild graph using DDC difficulty params (honeypot_density + graph_size vary)
