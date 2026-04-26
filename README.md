@@ -1,16 +1,3 @@
----
-title: CIPHER — Adversarial Multi-Agent Cyber-Ops RL
-emoji: 🎯
-colorFrom: indigo
-colorTo: red
-sdk: docker
-sdk_version: "1.0"
-python_version: "3.11"
-app_file: hf_app.py
-app_port: 7860
-pinned: false
----
-
 # CIPHER — Adversarial Multi-Agent Cyber-Ops RL Environment
 
 > **OpenEnv Hackathon India 2026 · Theme 1: Multi-Agent Interactions**
@@ -224,21 +211,18 @@ print(env.render())
 
 ## Training
 
-### Google Colab (free T4 GPU, ~25–35 min)
+### Kaggle (free T4 GPU, ~1 hour)
 
-Open **[CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
+Open **[cipher_training_red_v1.ipynb](https://www.kaggle.com/code/wolfie8935/notebook465b5e764b)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
+
+Open **[cipher_training_blue_v1.ipynb](https://www.kaggle.com/code/wolfie8935/cipher-training-blue-v1)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the BLUE Planner, and saves a LoRA adapter.
 
 ```
 Runtime → Run all
-# Outputs: red trained/cipher-red-planner/ (LoRA adapter)
-```
-
-### Local / RunPod
-
-```bash
-pip install -r requirements.txt
-jupyter notebook cipher-training-red-v2.ipynb   # local Unsloth + TRL GRPO template
-python cipher-training-blue-v2.py      # BLUE Surveillance (bonus)
+# Outputs: red trained/cipher-red-planner_v1/ (LoRA adapter)
+# Outputs: red trained/cipher-red-analyst_v1/ (LoRA adapter)
+# Outputs: blue trained/cipher-blue-survellience_v1/ (LoRA adapter)
+# Outputs: blue trained/cipher-red-planner_v1/ (LoRA adapter)
 ```
 
 ### What the training loop does
@@ -300,11 +284,11 @@ Copy `.env.example` to `.env` and set `NVIDIA_API_KEY` for full LLM inference.
 python main.py                                  # single episode, stub (instant)
 python main.py --episodes 5                     # 5-episode competition
 python main.py --train --train-episodes 50      # training loop
-python main.py --hybrid                         # trained RED LoRA + NIM others
+python main.py --hybrid                  # trained RED LoRA + trained BLUE LoRA
 python main.py --live                           # all agents use full LLM
 python -m cipher.dashboard.app                  # dashboard → localhost:8050
 python verify_openenv.py                        # OpenEnv compliance check
-python -m pytest tests/ -v                      # 290 tests
+python -m pytest tests/ -v                      # 310 tests
 python generate_plots.py                        # regenerate assets/
 ```
 
