@@ -226,7 +226,7 @@ print(env.render())
 
 ### Kaggle (free T4 GPU, ~1 hour)
 
-Open **[cipher_training_red_v1.ipynb](https://www.kaggle.com/code/wolfie8935/notebook465b5e764b)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
+Open **[cipher_training_red_v1.ipynb](https://www.kaggle.com/code/wolfie8935/cipher-training-red-v1)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
 
 Open **[cipher_training_blue_v1.ipynb](https://www.kaggle.com/code/wolfie8935/cipher-training-blue-v1)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the BLUE Planner, and saves a LoRA adapter.
 
