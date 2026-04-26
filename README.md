@@ -20,6 +20,9 @@ pinned: false
 [![Training](https://img.shields.io/badge/Training-Unsloth%20GRPO-orange)](cipher-training-red-v2.ipynb)
 [![Tests](https://img.shields.io/badge/Tests-290%20passing-blue)]()
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)]()
+[![Hugging Face Space](https://img.shields.io/badge/Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/wolfie8935/cipher-openenv)
+
+**Live demo (Hugging Face):** https://huggingface.co/spaces/wolfie8935/cipher-openenv
 
 ---
 
@@ -326,13 +329,13 @@ See `commands.md` for the full reference.
 
 | Resource | Link |
 |---|---|
-| GitHub repository | *(replace with your public repo URL after push)* |
-| HuggingFace Space | *(replace after deploy — Docker + `hf_app.py` on port 7860)* |
-| Training Notebook (Colab) | [CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb) |
+| **HuggingFace Space (live environment)** | [https://huggingface.co/spaces/wolfie8935/cipher-openenv](https://huggingface.co/spaces/wolfie8935/cipher-openenv) |
+| **GitHub repository** | [https://github.com/wolfie8935/OPENENV-FINAL](https://github.com/wolfie8935/OPENENV-FINAL) |
+| **Training Notebook (Colab)** | [CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb) |
 | Local training notebook | [cipher-training-red-v2.ipynb](cipher-training-red-v2.ipynb) |
-| Model / LoRA weights | *(optional: Hugging Face model repo URL for `cipher-red-planner` adapter)* |
-| Mini-blog (HuggingFace or GitHub wiki) | *(replace after publish)* |
-| Demo Video (2–3 min) | *(replace after YouTube / Loom upload)* |
+| Episode traces dataset | [wolfie8935/cipher-traces](https://huggingface.co/datasets/wolfie8935/cipher-traces) |
+| Mini-blog (HuggingFace) | *(add HuggingFace blog post URL here after publishing)* |
+| Demo Video (&lt;2 min) | *(add YouTube / Loom URL here after recording)* |
 
 ---
 

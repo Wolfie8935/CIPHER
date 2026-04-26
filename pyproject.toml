@@ -8,9 +8,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openenv-cipher"
 version = "2.0.0"
-description = "CIPHER: adversarial multi-agent cyber-ops RL environment (OpenEnv)"
+description = "CIPHER: adversarial multi-agent cyber-ops RL environment — Theory-of-Mind reasoning under adversarial pressure (OpenEnv)"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = [
+    "reinforcement-learning", "multi-agent", "llm", "openenv",
+    "adversarial", "theory-of-mind", "cybersecurity", "rl-environment",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core runtime deps — always required
 dependencies = [
     "openenv-core>=0.1.0",
     "openenv>=0.1.13",
@@ -26,16 +42,22 @@ dependencies = [
     "requests>=2.31.0",
     "numpy>=1.26.0",
     "pandas>=2.0.0",
+    "flask>=3.0.0",
+    "flask-cors>=5.0.0",
+    "huggingface_hub>=0.23.0",
+    "gunicorn>=22.0.0",
+]
+
+[project.optional-dependencies]
+# Dashboard (Dash analytics view — not required for the React war room)
+dashboard = [
     "plotly>=5.20.0",
     "dash>=2.16.0",
     "dash-bootstrap-components>=1.5.0",
-    "flask>=3.0.0",
-    "flask-cors>=5.0.0",
     "matplotlib>=3.8.0",
-    "huggingface_hub>=0.23.0",
-    "gunicorn>=22.0.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
+]
+# Training / fine-tuning (Unsloth GRPO / HF TRL)
+training = [
     "torch>=2.1.0",
     "torchvision>=0.16.0",
     "transformers>=4.40.0",
@@ -43,7 +65,23 @@ dependencies = [
     "accelerate>=0.30.0",
     "safetensors>=0.4.0",
     "sentencepiece>=0.1.99",
+    "trl>=0.8.0",
 ]
+# Test suite
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+# Convenience: everything
+all = [
+    "openenv-cipher[dashboard,training,dev]",
+]
+
+[project.urls]
+"Homepage" = "https://huggingface.co/spaces/wolfie8935/cipher-openenv"
+"Repository" = "https://github.com/wolfie8935/OPENENV-FINAL"
+"Bug Tracker" = "https://github.com/wolfie8935/OPENENV-FINAL/issues"
+"HuggingFace Space" = "https://huggingface.co/spaces/wolfie8935/cipher-openenv"
 
 [project.scripts]
 server = "server.app:main"
@@ -51,3 +89,7 @@ server = "server.app:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cipher*", "server*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

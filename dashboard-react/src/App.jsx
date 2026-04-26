@@ -195,6 +195,17 @@ function mergeLifecycleWithAgentStatus(derived, agents, team) {
   };
 }
 
+async function sendControl(action) {
+  try {
+    const res = await fetch('/api/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    return await res.json();
+  } catch { return { ok: false }; }
+}
+
 export default function App() {
   const [selectedEpisode, setSelectedEpisode] = useState(null);
   const [episodes, setEpisodes]       = useState([]);
@@ -203,6 +214,7 @@ export default function App() {
   const [rightTab,   setRightTab]     = useState('battle');
   const [zoneBreach, setZoneBreach]   = useState(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [ctrlMsg, setCtrlMsg]         = useState(null);
 
   useEffect(() => {
     if (!RIGHT_TAB_IDS.has(rightTab)) {
@@ -401,6 +413,19 @@ export default function App() {
           <span style={{ color: '#ff4444' }}>C</span>
           <span style={{ color: 'var(--text)' }}>IPHER</span>
           <span className="top-bar-brand-sub">WAR ROOM</span>
+          <div className="ctrl-panel">
+            {['start','step','reset'].map(act => (
+              <button key={act} className={`ctrl-btn ctrl-btn-${act}`}
+                onClick={async () => {
+                  const r = await sendControl(act);
+                  setCtrlMsg(r.message || (r.ok ? `${act} OK` : r.error));
+                  setTimeout(() => setCtrlMsg(null), 3000);
+                }}>
+                {act === 'start' ? '▶ START' : act === 'step' ? '⏭ STEP' : '↺ RESET'}
+              </button>
+            ))}
+            {ctrlMsg && <span className="ctrl-msg">{ctrlMsg}</span>}
+          </div>
         </div>
 
         <div className="top-bar-right">

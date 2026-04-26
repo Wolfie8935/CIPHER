@@ -8,11 +8,13 @@ from __future__ import annotations
 import csv
 import glob
 import json
+import os
 import sys
 from pathlib import Path
 
 import subprocess
 import threading
+from datetime import datetime
 from flask import Flask, jsonify, send_from_directory, redirect, Response, request
 from flask_cors import CORS
 
@@ -443,7 +445,75 @@ def commanders():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "root": str(ROOT)})
+    traces_repo = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
+    space_url = os.getenv(
+        "HF_SPACE_URL",
+        "https://huggingface.co/spaces/wolfie8935/cipher-openenv",
+    )
+    push = (os.getenv("CIPHER_PUSH_TRACES_HF") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    ts = _read_json(ROOT / "training_state.json")
+    return jsonify(
+        {
+            "status": "ok",
+            "root": str(ROOT),
+            "hf_space_url": space_url,
+            "hf_traces_dataset_url": f"https://huggingface.co/datasets/{traces_repo}",
+            "hf_traces_repo": traces_repo,
+            "cipher_push_traces_hf": push,
+            "training_status": ts.get("status", "idle"),
+            "current_episode": ts.get("current_episode"),
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+
+
+@app.route("/api/control", methods=["POST"])
+def control():
+    """Start / Step / Reset control endpoint for the HF Space UI."""
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action", "")).strip().lower()
+    ts_path = ROOT / "training_state.json"
+
+    if action == "start":
+        state = _read_json(ts_path) or {}
+        state.update({
+            "status": "starting",
+            "control_action": "start",
+            "control_timestamp": datetime.now().isoformat(),
+        })
+        ts_path.write_text(json.dumps(state, indent=2))
+        print("[START] Control: start action received via /api/control", flush=True)
+        return jsonify({"ok": True, "action": "start", "message": "Training start requested."})
+
+    elif action == "reset":
+        state = _read_json(ts_path) or {}
+        state.update({
+            "status": "idle",
+            "control_action": "reset",
+            "control_timestamp": datetime.now().isoformat(),
+            "current_episode": 0,
+            "total_steps": 0,
+        })
+        ts_path.write_text(json.dumps(state, indent=2))
+        live_path = ROOT / "live_steps.jsonl"
+        if live_path.exists():
+            live_path.write_text("")
+        print("[RESET] Control: reset action received via /api/control", flush=True)
+        return jsonify({"ok": True, "action": "reset", "message": "Environment reset."})
+
+    elif action == "step":
+        state = _read_json(ts_path) or {}
+        state.update({
+            "control_action": "step",
+            "control_timestamp": datetime.now().isoformat(),
+        })
+        ts_path.write_text(json.dumps(state, indent=2))
+        print("[STEP] Control: step action received via /api/control", flush=True)
+        return jsonify({"ok": True, "action": "step", "message": "Step requested."})
+
+    return jsonify({"ok": False, "error": f"Unknown action: {action!r}. Use start|step|reset."}), 400
 
 
 @app.route("/api/training-state")

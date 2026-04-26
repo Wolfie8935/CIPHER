@@ -197,6 +197,29 @@ body { color: var(--text); font-family: var(--sans); -webkit-font-smoothing: ant
   margin-left: 8px;
 }
 
+.ctrl-panel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.ctrl-btn {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.ctrl-btn:hover { opacity: 0.8; }
+.ctrl-btn-start { background: rgba(0,229,80,0.12); color: #00e550; border-color: rgba(0,229,80,0.35); }
+.ctrl-btn-step  { background: rgba(0,180,255,0.12); color: #00b4ff; border-color: rgba(0,180,255,0.35); }
+.ctrl-btn-reset { background: rgba(255,167,0,0.12); color: #ffa700; border-color: rgba(255,167,0,0.35); }
+.ctrl-msg { font-family: var(--mono); font-size: 9px; color: #69f0ae; margin-left: 4px; opacity: 0.85; }
+
 .top-bar-right {
   justify-self: end;
   min-width: 0;

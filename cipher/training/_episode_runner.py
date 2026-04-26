@@ -344,11 +344,23 @@ def run_episode(
 
     # ── Print startup banner ─────────────────────────────────────
     if verbose:
-        _print_banner(episode_number, graph_size, len(red_agents) + len(blue_agents))
+        _print_banner(episode_number, _graph_size, len(red_agents) + len(blue_agents))
+    print(
+        f"[START] Episode {episode_number} | graph={_graph_size} nodes"
+        f" | agents={len(red_agents) + len(blue_agents)}"
+        f" | max_steps={max_steps}",
+        flush=True,
+    )
 
     # ── Episode loop ─────────────────────────────────────────────
     for step in range(1, max_steps + 1):
         state.step = step
+        print(
+            f"[STEP] {step}/{max_steps} | ep={episode_number}"
+            f" | sus={state.red_suspicion_score:.2f}"
+            f" | det={state.blue_detection_confidence:.2f}",
+            flush=True,
+        )
 
         # ── Check context reset ──────────────────────────────────
         context_reset = (
@@ -360,6 +372,7 @@ def run_episode(
             state.red_context_resets += 1
             for agent in red_agents:
                 agent.reset()
+            print(f"[RESET] Context reset at step {step} | vault_drops={len(vault.list_all_drop_paths())}", flush=True)
             if verbose:
                 _print_memento_reset(step, vault)
 
@@ -1725,3 +1738,16 @@ def _save_episode_trace(
 
     if verbose:
         console.print(f"  [dim]Trace saved: {trace_path}[/dim]")
+
+    try:
+        from cipher.utils.hf_uploader import maybe_push_episode_trace
+
+        if maybe_push_episode_trace(trace_path):
+            if verbose:
+                console.print(
+                    "  [dim]Trace pushed to Hugging Face dataset "
+                    f"(CIPHER_PUSH_TRACES_HF): {trace_path.name}[/dim]"
+                )
+    except Exception as exc:
+        if verbose:
+            console.print(f"  [dim]HF trace upload skipped: {exc}[/dim]")
