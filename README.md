@@ -314,12 +314,11 @@ See `commands.md` for the full reference.
 | Resource | Link |
 |---|---|
 | **HuggingFace Space (live environment)** | [https://huggingface.co/spaces/wolfie8935/cipher-openenv](https://huggingface.co/spaces/wolfie8935/cipher-openenv) |
-| **GitHub repository** | [https://github.com/wolfie8935/OPENENV-FINAL](https://github.com/wolfie8935/OPENENV-FINAL) |
+| **GitHub repository** | [https://github.com/Wolfie8935/CIPHER](https://github.com/Wolfie8935/CIPHER) |
 | **Training Notebook (Colab)** | [CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb) |
 | Local training notebook | [cipher-training-red-v2.ipynb](cipher-training-red-v2.ipynb) |
 | Episode traces dataset | [wolfie8935/cipher-traces](https://huggingface.co/datasets/wolfie8935/cipher-traces) |
-| Mini-blog (HuggingFace) | *(add HuggingFace blog post URL here after publishing)* |
-| Demo Video (&lt;2 min) | *(add YouTube / Loom URL here after recording)* |
+| Demo Video (&lt;2 min) | [https://youtu.be/GzmJSGsfLWo](https://youtu.be/GzmJSGsfLWo) |
 
 ---
 
