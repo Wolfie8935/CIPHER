@@ -1,9 +1,10 @@
 {
-  "status": "running",
-  "current_episode": 0,
-  "total_episodes": 1,
-  "llm_mode": "hybrid",
-  "run_id": "hybrid_20260426_100606",
-  "started_at": "2026-04-26T10:06:06.611731",
-  "last_updated": "2026-04-26T10:06:07.154803"
+  "status": "complete",
+  "current_episode": 10,
+  "total_episodes": 10,
+  "llm_mode": "live",
+  "started_at": "2026-04-26T10:45:05.028571",
+  "last_updated": "2026-04-26T10:46:28.203667",
+  "red_policy_updates": 10,
+  "blue_policy_updates": 10
 }
