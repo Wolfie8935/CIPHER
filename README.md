@@ -213,19 +213,16 @@ print(env.render())
 
 ### Kaggle (free T4 GPU, ~1 hour)
 
-Open **[CIPHER_Training_Colab.ipynb](CIPHER_Training_Colab.ipynb)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
+Open **[cipher_training_red_v1.ipynb](https://www.kaggle.com/code/wolfie8935/notebook465b5e764b)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the RED Planner, and saves a LoRA adapter.
+
+Open **[cipher_training_blue_v1.ipynb](https://www.kaggle.com/code/wolfie8935/cipher-training-blue-v1)** — installs Unsloth, connects to CIPHEREnv, runs GRPO fine-tuning on the BLUE Planner, and saves a LoRA adapter.
 
 ```
 Runtime → Run all
-# Outputs: red trained/cipher-red-planner/ (LoRA adapter)
-```
-
-### Local / RunPod
-
-```bash
-pip install -r requirements.txt
-jupyter notebook cipher-training-red-v2.ipynb   # local Unsloth + TRL GRPO template
-python cipher-training-blue-v2.py      # BLUE Surveillance (bonus)
+# Outputs: red trained/cipher-red-planner_v1/ (LoRA adapter)
+# Outputs: red trained/cipher-red-analyst_v1/ (LoRA adapter)
+# Outputs: blue trained/cipher-blue-survellience_v1/ (LoRA adapter)
+# Outputs: blue trained/cipher-red-planner_v1/ (LoRA adapter)
 ```
 
 ### What the training loop does
