@@ -147,7 +147,7 @@ class ScenarioGenerator:
                     f"CSV bootstrap: RED win rate {win_rate:.0%} → difficulty raised to {self._difficulty_curve:.2f}"
                 )
             elif win_rate < 0.30:
-                self._difficulty_curve = max(0.20, self._difficulty_curve - 0.05)
+                self._difficulty_curve = max(0.30, self._difficulty_curve - 0.05)
                 logger.debug(
                     f"CSV bootstrap: RED win rate {win_rate:.0%} → difficulty lowered to {self._difficulty_curve:.2f}"
                 )
@@ -239,7 +239,7 @@ class ScenarioGenerator:
         After BLUE win: difficulty decreases (easier for RED next time).
         After draw: no change.
 
-        The difficulty stays within [0.1, 0.9] bounds. Step size is +-0.05.
+        The difficulty stays within [0.30, 0.9] bounds. Step size is +-0.05.
 
         Args:
             winner: 'red', 'blue', or 'draw'.
@@ -253,7 +253,7 @@ class ScenarioGenerator:
                 f"RED won -> difficulty increased to {self._difficulty_curve:.2f}"
             )
         elif winner == "blue":
-            self._difficulty_curve = max(0.1, self._difficulty_curve - step)
+            self._difficulty_curve = max(0.30, self._difficulty_curve - step)
             logger.debug(
                 f"BLUE won -> difficulty decreased to {self._difficulty_curve:.2f}"
             )
