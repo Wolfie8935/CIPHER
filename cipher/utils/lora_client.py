@@ -21,8 +21,18 @@ from cipher.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Base model — normal unsloth instruction model (NOT bnb-4bit quantized)
-_BASE_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
+# Base model — must match what the adapters were trained on.
+# All four specialist adapters (planner, analyst, surveillance, threat_hunter)
+# were fine-tuned from unsloth's 4-bit BNB checkpoint. Loading the non-quantized
+# instruction model also works (same architecture), but the BNB version is the
+# canonical base and avoids any weight-name mismatches.
+# On CPU / machines without bitsandbytes, fall back to the plain instruct model
+# by setting CIPHER_LORA_BASE_MODEL env var to "unsloth/Llama-3.2-1B-Instruct".
+import os as _os
+_BASE_MODEL_ID = _os.getenv(
+    "CIPHER_LORA_BASE_MODEL",
+    "unsloth/llama-3.2-1b-instruct-unsloth-bnb-4bit",
+)
 
 # Default adapter path (legacy fallback)
 _DEFAULT_ADAPTER_PATH = os.path.join("red trained", "cipher-red-planner-v1")
@@ -84,40 +94,59 @@ class LoRAClient:
                     f"Check that the adapter folder exists."
                 )
 
+            # ── Device selection (CUDA → MPS → CPU) ───────────────────────
+            if torch.cuda.is_available():
+                device = "cuda"
+                dtype = torch.float16
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                device = "mps"
+                dtype = torch.float16   # MPS supports fp16; bfloat16 has limited support
+            else:
+                device = "cpu"
+                dtype = torch.float32
+
             # ── Tokenizer ──────────────────────────────────────────────────
             logger.info(f"[LoRA] Loading tokenizer from: {resolved}")
             try:
                 tokenizer = AutoTokenizer.from_pretrained(resolved)
             except Exception as e:
                 logger.warning(f"[LoRA] Adapter tokenizer failed ({e}), using base tokenizer.")
-                tokenizer = AutoTokenizer.from_pretrained(_BASE_MODEL_ID)
+                tokenizer = AutoTokenizer.from_pretrained("unsloth/Llama-3.2-1B-Instruct")
 
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
             # ── Base model ─────────────────────────────────────────────────
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype  = torch.float16 if torch.cuda.is_available() else torch.float32
+            # Adapters were trained on the BNB 4-bit checkpoint; on non-CUDA
+            # machines fall back to the plain instruct model (same architecture).
+            _plain_base = "unsloth/Llama-3.2-1B-Instruct"
+            base_model_id = _BASE_MODEL_ID
 
-            logger.info(f"[LoRA] Loading base model {_BASE_MODEL_ID} on {device} ({dtype})")
-            print(f"\n  🔴 [LoRA] Loading specialist: {Path(resolved).name}")
-            print(f"  🔴 [LoRA] Device: {device.upper()} | dtype: {str(dtype).split('.')[-1]}")
+            logger.info(f"[LoRA] Loading base model {base_model_id} on {device} ({dtype})")
+            print(f"\n  [LoRA] Loading specialist: {Path(resolved).name}")
+            print(f"  [LoRA] Device: {device.upper()} | dtype: {str(dtype).split('.')[-1]}")
 
-            base_model = AutoModelForCausalLM.from_pretrained(
-                _BASE_MODEL_ID,
+            # device_map="auto" conflicts with MPS — load on CPU then move.
+            cpu_load_kwargs: dict = dict(
                 torch_dtype=dtype,
-                device_map="auto" if torch.cuda.is_available() else "cpu",
+                device_map=None,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
+            try:
+                base_model = AutoModelForCausalLM.from_pretrained(base_model_id, **cpu_load_kwargs)
+            except Exception as bnb_exc:
+                logger.warning(
+                    f"[LoRA] Could not load {base_model_id} ({bnb_exc}). "
+                    f"Falling back to {_plain_base} in fp32."
+                )
+                cpu_load_kwargs["torch_dtype"] = torch.float32
+                base_model = AutoModelForCausalLM.from_pretrained(_plain_base, **cpu_load_kwargs)
 
             # ── LoRA adapter ───────────────────────────────────────────────
             logger.info(f"[LoRA] Attaching adapter: {resolved}")
-            model = PeftModel.from_pretrained(
-                base_model,
-                resolved,
-                low_cpu_mem_usage=True,
-            )
+            model = PeftModel.from_pretrained(base_model, resolved, low_cpu_mem_usage=True)
+            model = model.to(device)
             model.eval()
 
             # Clear conflicting max_length so max_new_tokens is the sole limit
@@ -125,7 +154,7 @@ class LoRAClient:
                 model.generation_config.max_length = None
 
             self._models[adapter_path] = (model, tokenizer)
-            print(f"  🔴 [LoRA] {Path(resolved).name} READY ✓\n")
+            print(f"  [LoRA] {Path(resolved).name} READY on {device.upper()}\n")
 
     # ── Inference ───────────────────────────────────────────────────────────
 
@@ -133,7 +162,7 @@ class LoRAClient:
         self,
         messages: list[dict[str, str]],
         adapter_path: str = _DEFAULT_ADAPTER_PATH,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = 80,
         temperature: float = 0.7,
         team: str = "red",
     ) -> str:
@@ -165,16 +194,19 @@ class LoRAClient:
             user_msg   = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
             prompt = f"<|system|>\n{system_msg}\n<|user|>\n{user_msg}\n<|assistant|>\n"
 
+        # Keep input short — CIPHER actions are compact JSON, so 256 input tokens
+        # is enough. Shorter context = much faster inference on MPS/CPU.
         inputs = tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
+            prompt, return_tensors="pt", truncation=True, max_length=256
         ).to(model.device)
 
+        # Greedy decoding (do_sample=False) is 2-3× faster than sampling and
+        # perfectly fine for structured JSON outputs. Actions are < 80 tokens.
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=True,
+                do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
             )
 

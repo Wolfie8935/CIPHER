@@ -52,6 +52,20 @@ class BaseCommander(BaseAgent):
     # as a sane default before the LLM has decided).
     DEFAULT_ROSTER: tuple[str, ...] = ()
 
+    def act(self) -> Action:
+        """
+        Commanders always use stub heuristics regardless of LLM_MODE.
+
+        Trained subagents (planner, analyst, surveillance, threat_hunter) handle
+        execution via LoRA; untrained subagents use the HF API. The commander
+        itself only orchestrates — spawning, delegating, dismissing — which is
+        a deterministic heuristic task, not an LLM inference task.
+        """
+        self.step_count += 1
+        action = self._stub_act()
+        self.action_history.append(action)
+        return action
+
     def __init__(
         self,
         agent_id: str,
@@ -341,6 +355,12 @@ class RedCommander(BaseCommander):
         return any(c >= 2 for c in counts.values())
 
     def act_step(self, *, step: int, parallel: bool = False) -> list[Action]:
+        # Pre-spawn the full default roster directly into the registry so all
+        # agents are alive from step 1 instead of one-per-step. Trained roles
+        # (planner, analyst) will use their LoRA adapters; untrained roles
+        # (operative, exfiltrator) will use the HF API.
+        self._cur_step = step
+        self.ensure_default_roster(step=step)
         actions = super().act_step(step=step, parallel=parallel)
         # Track the RED action with the highest-zone target (the "primary" move)
         # for oscillation detection across steps.
@@ -594,13 +614,14 @@ class BlueCommander(BaseCommander):
 
     def act_step(self, *, step: int, parallel: bool = False) -> list[Action]:
         """
-        Override to pre-spawn essential surveillance subagents before calling the
-        LLM. The LLM reliably ignores spawn instructions, so we enforce it here
-        programmatically regardless of what the LLM decides.
+        Pre-spawn the full default roster directly (all 4 roles at once) so
+        trained agents (surveillance, threat_hunter) and untrained agents
+        (deception_architect, forensics) are all alive from step 1.
+        Trained roles use their LoRA adapters; untrained roles use the HF API.
         """
         self._cur_step = step
+        self.ensure_default_roster(step=step)
         self._pre_spawn_surveillance(step=step)
-        # Delegate to base implementation (which calls self.act() for the LLM action)
         return super().act_step(step=step, parallel=parallel)
 
     def _pre_spawn_surveillance(self, *, step: int) -> None:
