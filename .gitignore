@@ -46,14 +46,6 @@ episode_reports/
 data/finetune/
 logs/
 
-# ── Model checkpoints & LoRA adapters ────────────────────────────────────────
-red trained/
-blue trained/
-*.safetensors
-*.bin
-*.pt
-*.ckpt
-
 # ── Upload scratch ────────────────────────────────────────────────────────────
 tmp_hf_upload/
 
