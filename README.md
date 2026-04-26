@@ -1,3 +1,16 @@
+---
+title: CIPHER — Adversarial Multi-Agent Cyber-Ops RL
+emoji: 🎯
+colorFrom: indigo
+colorTo: red
+sdk: docker
+sdk_version: "1.0"
+python_version: "3.11"
+app_file: hf_app.py
+app_port: 7860
+pinned: false
+---
+
 # CIPHER — Adversarial Multi-Agent Cyber-Ops RL Environment
 
 > **OpenEnv Hackathon India 2026 · Theme 1: Multi-Agent Interactions**
