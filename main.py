@@ -195,7 +195,7 @@ def _print_competition_header(episode_num: int, total_episodes: int, mode: str,
     """Print the episode battle header."""
     if mode == "hybrid":
         red_label = "RED COMMANDER + subagents (Hybrid LoRA)"
-        mode_badge = "[bold red]HYBRID[/bold red] — RED Commander uses trained LoRA; subagents via HF API"
+        mode_badge = "[bold red]HYBRID[/bold red] — Commanders: stub · Trained (planner/analyst/surveillance/threat_hunter): LoRA · Others: HF API"
     elif mode == "live":
         red_label = "RED COMMANDER + dynamic subagents (LLM)"
         mode_badge = "[bold green]LIVE[/bold green] — Commanders + all subagents use real LLM inference"
@@ -963,20 +963,48 @@ def _preload_hybrid_specialists() -> None:
 
 def _validate_hybrid_models() -> None:
     """Check that all specialist LoRA adapters exist; warn if missing."""
-    specialists = {
-        "RED Commander":      os.getenv("RED_COMMANDER_LORA_PATH",       "red trained/cipher-red-commander-v1"),
-        "BLUE Commander":     os.getenv("BLUE_COMMANDER_LORA_PATH",      "blue trained/cipher-blue-commander-v1"),
-        "RED Planner":        os.getenv("RED_PLANNER_LORA_PATH",         "red trained/cipher-red-planner-v1"),
-        "RED Analyst":        os.getenv("RED_ANALYST_LORA_PATH",         "red trained/cipher-red-analyst-v1"),
-        "BLUE Surveillance":  os.getenv("BLUE_SURVEILLANCE_LORA_PATH",   "blue trained/cipher-blue-surveillance-v1"),
-        "BLUE ThreatHunter":  os.getenv("BLUE_THREAT_HUNTER_LORA_PATH",  "blue trained/cipher-blue-threat-hunter-v1"),
-    }
-    console.print("\n  [bold cyan]Hybrid specialist check:[/bold cyan]")
-    for name, path in specialists.items():
+    from cipher.utils.config import config
+
+    red_trained = [
+        ("Planner",  str(config.red_planner_lora_path)),
+        ("Analyst",  str(config.red_analyst_lora_path)),
+    ]
+    red_llm = ["Operative", "Exfiltrator"]
+
+    blue_trained = [
+        ("Surveillance",  str(config.blue_surveillance_lora_path)),
+        ("Threat Hunter", str(config.blue_threat_hunter_lora_path)),
+    ]
+    blue_llm = ["Deception Architect", "Forensics"]
+
+    console.print("\n  [bold cyan]Hybrid agent roster:[/bold cyan]")
+
+    # ── RED team ──────────────────────────────────────────────────────
+    console.print("  [bold red]RED Commander[/bold red] [dim](stub orchestrator)[/dim]")
+    console.print("    [dim]├─ Trained agents (LoRA):[/dim]")
+    for name, path in red_trained:
         if os.path.exists(path):
-            console.print(f"    [green]✓[/green] {name}: [dim]{path}[/dim]")
+            console.print(f"    [green]│  ✓[/green] {name}: [dim]{path}[/dim]")
         else:
-            console.print(f"    [yellow]⚠[/yellow]  {name} not found at '[dim]{path}[/dim]' — will use HF API")
+            console.print(f"    [yellow]│  ⚠[/yellow]  {name}: not found — [yellow]HF API fallback[/yellow]")
+    console.print("    [dim]└─ LLM agents (HF API):[/dim]")
+    for name in red_llm:
+        console.print(f"    [cyan]   ◆[/cyan] {name}")
+
+    console.print()
+
+    # ── BLUE team ─────────────────────────────────────────────────────
+    console.print("  [bold blue]BLUE Commander[/bold blue] [dim](stub orchestrator)[/dim]")
+    console.print("    [dim]├─ Trained agents (LoRA):[/dim]")
+    for name, path in blue_trained:
+        if os.path.exists(path):
+            console.print(f"    [green]│  ✓[/green] {name}: [dim]{path}[/dim]")
+        else:
+            console.print(f"    [yellow]│  ⚠[/yellow]  {name}: not found — [yellow]HF API fallback[/yellow]")
+    console.print("    [dim]└─ LLM agents (HF API):[/dim]")
+    for name in blue_llm:
+        console.print(f"    [cyan]   ◆[/cyan] {name}")
+
     console.print()
 
 

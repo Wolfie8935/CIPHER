@@ -403,7 +403,7 @@ class BaseAgent(ABC):
             response_text = client.complete(
                 messages=messages,
                 adapter_path=adapter_path,
-                max_new_tokens=256,
+                max_new_tokens=80,
                 temperature=0.7,
             )
             logger.info(f"[LoRA] {self.agent_id} response: {response_text[:80]}...")

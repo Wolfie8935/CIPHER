@@ -109,7 +109,7 @@ class EpisodeState:
         agent_id: str,
         action_type: str,
         action_payload: dict[str, Any],
-        result: dict[str, Any],
+        result: Any,
     ) -> None:
         """
         Append an action record to the episode log.
@@ -118,8 +118,12 @@ class EpisodeState:
             agent_id: The acting agent's identifier.
             action_type: The type of action taken (ActionType value).
             action_payload: The full action parameters.
-            result: The outcome of the action.
+            result: The outcome of the action (dict preferred; strings/other
+                    types are normalized to {"detail": str(result)} so every
+                    downstream reader can safely call result.get(...)).
         """
+        if not isinstance(result, dict):
+            result = {"detail": str(result)} if result is not None else {}
         entry = {
             "step": self.step,
             "agent_id": agent_id,
