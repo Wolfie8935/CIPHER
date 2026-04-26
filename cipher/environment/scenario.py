@@ -239,21 +239,20 @@ class ScenarioGenerator:
         After BLUE win: difficulty decreases (easier for RED next time).
         After draw: no change.
 
-        The difficulty stays within [0.30, 0.9] bounds. Step size is +-0.05.
+        The difficulty stays within [0.30, 0.9] bounds. RED win: +0.15, BLUE win: -0.05.
 
         Args:
             winner: 'red', 'blue', or 'draw'.
         """
         self._win_history.append(winner)
 
-        step = 0.05
         if winner == "red":
-            self._difficulty_curve = min(0.9, self._difficulty_curve + step)
+            self._difficulty_curve = min(0.9, self._difficulty_curve + 0.15)
             logger.debug(
                 f"RED won -> difficulty increased to {self._difficulty_curve:.2f}"
             )
         elif winner == "blue":
-            self._difficulty_curve = max(0.30, self._difficulty_curve - step)
+            self._difficulty_curve = max(0.30, self._difficulty_curve - 0.05)
             logger.debug(
                 f"BLUE won -> difficulty decreased to {self._difficulty_curve:.2f}"
             )
