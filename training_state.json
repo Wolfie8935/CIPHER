@@ -1,10 +1,11 @@
 {
   "status": "complete",
-  "current_episode": 20,
-  "total_episodes": 20,
-  "llm_mode": "stub",
-  "started_at": "2026-04-26T03:59:33.150655",
-  "last_updated": "2026-04-26T03:59:46.271651",
-  "red_policy_updates": 17,
-  "blue_policy_updates": 17
+  "current_episode": 1,
+  "total_episodes": 1,
+  "llm_mode": "live",
+  "run_id": "live_20260426_083016",
+  "started_at": "2026-04-26T08:30:16.233119",
+  "last_updated": "2026-04-26T08:30:28.993453",
+  "estimated_cost_usd": 0.1024,
+  "total_steps": 20
 }

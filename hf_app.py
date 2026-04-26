@@ -6,6 +6,10 @@ Flask API server on port 7860. No Flask vs Dash ambiguity — judges see the
 React dashboard.
 
 Set HF_TOKEN and API_BASE_URL as HF Space secrets (not hardcoded here).
+
+Episode traces: local runs can push each new trace to the Hub dataset with
+CIPHER_PUSH_TRACES_HF=1 (see .env.example). This Space reads demo traces from
+HF_TRACES_REPO when episode_traces/ is empty on boot.
 """
 from __future__ import annotations
 

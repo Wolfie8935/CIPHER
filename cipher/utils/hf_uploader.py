@@ -18,6 +18,16 @@ from pathlib import Path
 
 HF_REPO_ID = os.getenv("HF_REPO_ID", "wolfie8935/cipher-specialists")
 HF_TRACES_REPO = os.getenv("HF_TRACES_REPO", "wolfie8935/cipher-traces")
+# Public Space URL (for dashboards / health JSON; not used for Hub API calls)
+HF_SPACE_URL = os.getenv(
+    "HF_SPACE_URL",
+    "https://huggingface.co/spaces/wolfie8935/cipher-openenv",
+)
+
+
+def _env_push_traces_enabled() -> bool:
+    v = (os.getenv("CIPHER_PUSH_TRACES_HF") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 SPECIALIST_DIRS = {
     "red_planner": os.getenv("RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"),
@@ -151,6 +161,61 @@ def upload_traces(traces_dir: str = "episode_traces",
                 print(f"  [ERR]  {tf.name}: {e}")
 
     return uploaded
+
+
+def upload_episode_trace_file(
+    trace_path: str | Path,
+    *,
+    repo_id: str | None = None,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Upload a single episode trace JSON to the HF Dataset at ``traces/<filename>``.
+
+    Used after each local save when ``CIPHER_PUSH_TRACES_HF`` is enabled.
+    Requires ``HF_TOKEN`` (or ``HUGGINGFACE_TOKEN``) with write access to the dataset.
+    """
+    path = Path(trace_path)
+    if not path.is_file() or path.suffix.lower() != ".json":
+        return False
+    rid = repo_id or HF_TRACES_REPO
+    api = _get_api()
+
+    if not dry_run:
+        try:
+            from huggingface_hub import create_repo
+
+            create_repo(rid, repo_type="dataset", exist_ok=True)
+        except Exception:
+            pass
+
+    dest = f"traces/{path.name}"
+    if dry_run:
+        print(f"  [DRY]  Would upload trace {path.name} → datasets/{rid}/{dest}")
+        return True
+    try:
+        api.upload_file(
+            path_or_fileobj=str(path),
+            path_in_repo=dest,
+            repo_id=rid,
+            repo_type="dataset",
+            commit_message=f"Add trace {path.name}",
+        )
+        print(f"  [OK]   Uploaded trace to Hub: datasets/{rid} (file {dest})")
+        return True
+    except Exception as e:
+        print(f"  [ERR]  Trace upload {path.name}: {e}")
+        return False
+
+
+def maybe_push_episode_trace(trace_path: str | Path, *, dry_run: bool = False) -> bool:
+    """
+    If ``CIPHER_PUSH_TRACES_HF`` is truthy, upload ``trace_path`` to ``HF_TRACES_REPO``.
+    Otherwise no-op (returns False).
+    """
+    if not _env_push_traces_enabled():
+        return False
+    return upload_episode_trace_file(trace_path, dry_run=dry_run)
 
 
 def upload_reports(reports_dir: str = "episode_reports",
