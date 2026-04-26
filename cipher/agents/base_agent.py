@@ -295,16 +295,15 @@ class BaseAgent(ABC):
         self.action_history.append(action)
         return action
 
-    # Maps (team, role) → (env_var, default_adapter_path) for LoRA specialists.
-    # v2 adds the COMMANDER entries — when --hybrid, the trained commanders
-    # take over the orchestration layer via these LoRAs.
-    _LORA_PATH_MAP: dict = {
-        ("red",  "commander"):     ("RED_COMMANDER_LORA_PATH",      os.path.join("red trained", "cipher-red-commander-v1")),
-        ("blue", "commander"):     ("BLUE_COMMANDER_LORA_PATH",     os.path.join("blue trained", "cipher-blue-commander-v1")),
-        ("red",  "planner"):       ("RED_PLANNER_LORA_PATH",        os.path.join("red trained", "cipher-red-planner-v1")),
-        ("red",  "analyst"):       ("RED_ANALYST_LORA_PATH",        os.path.join("red trained", "cipher-red-analyst-v1")),
-        ("blue", "surveillance"):  ("BLUE_SURVEILLANCE_LORA_PATH",  os.path.join("blue trained", "cipher-blue-surveillance-v1")),
-        ("blue", "threat_hunter"): ("BLUE_THREAT_HUNTER_LORA_PATH", os.path.join("blue trained", "cipher-blue-threat-hunter-v1")),
+    # Maps (team, role) → config attribute name for the LoRA adapter path.
+    # Paths are resolved from project root inside CipherConfig — no env vars needed.
+    _LORA_PATH_MAP: dict[tuple[str, str], str] = {
+        ("red",  "commander"):     "red_commander_lora_path",
+        ("blue", "commander"):     "blue_commander_lora_path",
+        ("red",  "planner"):       "red_planner_lora_path",
+        ("red",  "analyst"):       "red_analyst_lora_path",
+        ("blue", "surveillance"):  "blue_surveillance_lora_path",
+        ("blue", "threat_hunter"): "blue_threat_hunter_lora_path",
     }
 
     def _is_hybrid_specialist(self) -> bool:
@@ -312,9 +311,8 @@ class BaseAgent(ABC):
         key = (self.team, self.role)
         if key not in self._LORA_PATH_MAP:
             return False
-        env_key, default_path = self._LORA_PATH_MAP[key]
-        adapter_path = os.getenv(env_key, default_path)
-        return bool(os.path.exists(adapter_path))
+        adapter_path = getattr(self.config, self._LORA_PATH_MAP[key], "")
+        return bool(adapter_path and os.path.exists(adapter_path))
 
     def _get_adaptive_temperature(self) -> float:
         """Change 6a: Return temperature based on recent losing streak.
@@ -393,8 +391,8 @@ class BaseAgent(ABC):
         then calls the LoRA client. Falls back to HF API on any loading error.
         """
         key = (self.team, self.role)
-        env_key, default_path = self._LORA_PATH_MAP.get(key, ("", ""))
-        adapter_path = os.getenv(env_key, default_path) if env_key else default_path
+        attr = self._LORA_PATH_MAP.get(key, "")
+        adapter_path = getattr(self.config, attr, "") if attr else ""
 
         try:
             from cipher.utils.lora_client import LoRAClient

@@ -68,10 +68,7 @@ class LLMClient:
             )
 
         if self.backend == "hybrid":
-            import os as _os
-            self._lora_adapter_path = _os.getenv(
-                "RED_PLANNER_LORA_PATH", "red trained/cipher-red-planner-v1"
-            )
+            self._lora_adapter_path = config.red_planner_lora_path
 
         logger.info(f"LLMClient initialized: backend={self.backend}")
         if self.backend == "hybrid":

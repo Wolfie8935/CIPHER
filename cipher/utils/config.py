@@ -92,13 +92,26 @@ class CipherConfig(BaseSettings):
     env_subagent_default_lifespan: int = Field(5)
     env_reward_delegation_enabled: bool = Field(False)
 
-    # ── LoRA adapter paths ────────────────────────────────────────────────
-    red_commander_lora_path: str = Field("red trained/cipher-red-commander-v1")
-    blue_commander_lora_path: str = Field("blue trained/cipher-blue-commander-v1")
-    red_planner_lora_path: str = Field("red trained/cipher-red-planner-v1")
-    red_analyst_lora_path: str = Field("red trained/cipher-red-analyst-v1")
-    blue_surveillance_lora_path: str = Field("blue trained/cipher-blue-surveillance-v1")
-    blue_threat_hunter_lora_path: str = Field("blue trained/cipher-blue-threat-hunter-v1")
+    # ── LoRA adapter paths (absolute, resolved from project root) ────────
+    # These are hardcoded here — do NOT put them in .env.
+    red_commander_lora_path: str = Field(
+        str(_PROJECT_ROOT / "red trained" / "cipher-red-commander-v1"),
+    )
+    blue_commander_lora_path: str = Field(
+        str(_PROJECT_ROOT / "blue trained" / "cipher-blue-commander-v1"),
+    )
+    red_planner_lora_path: str = Field(
+        str(_PROJECT_ROOT / "red trained" / "cipher-red-planner-v1"),
+    )
+    red_analyst_lora_path: str = Field(
+        str(_PROJECT_ROOT / "red trained" / "cipher-red-analyst-v1"),
+    )
+    blue_surveillance_lora_path: str = Field(
+        str(_PROJECT_ROOT / "blue trained" / "cipher-blue-surveillance-v1"),
+    )
+    blue_threat_hunter_lora_path: str = Field(
+        str(_PROJECT_ROOT / "blue trained" / "cipher-blue-threat-hunter-v1"),
+    )
 
     # ── Environment parameters ────────────────────────────────────────────
     env_graph_size: int = Field(50)
