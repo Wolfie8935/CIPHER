@@ -1,10 +1,10 @@
 {
   "status": "complete",
-  "current_episode": 25,
-  "total_episodes": 25,
+  "current_episode": 10,
+  "total_episodes": 10,
   "llm_mode": "stub",
-  "started_at": "2026-04-26T09:22:21.472988",
-  "last_updated": "2026-04-26T09:22:50.309554",
-  "red_policy_updates": 25,
-  "blue_policy_updates": 25
+  "started_at": "2026-04-26T09:27:13.997912",
+  "last_updated": "2026-04-26T09:27:21.722250",
+  "red_policy_updates": 8,
+  "blue_policy_updates": 8
 }
